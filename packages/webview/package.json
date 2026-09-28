@@ -1,0 +1,25 @@
+{
+  "name": "apilot-webview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "React + Vite UI for the Apilot VS Code extension webview.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "lucide-react": "^0.457",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^5.2.0",
+    "typescript": "^5.6",
+    "vite": "^5.4"
+  }
+}
