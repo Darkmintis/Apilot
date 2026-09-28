@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: 20
+  PNPM_VERSION: 11
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core (no editor deps)
+        run: pnpm --filter @apilot/core exec tsc -b --force
+
+      - name: Build codegen
+        run: pnpm --filter @apilot/codegen exec tsc -b --force
+
+      - name: Build skill
+        run: pnpm --filter @apilot/skill exec tsc -b --force
+
+      - name: Build MCP server
+        run: pnpm --filter @apilot/mcp exec tsc -b --force
+
+      - name: Build CLI
+        run: pnpm --filter @apilot/cli exec tsc -b --force
+
+      - name: Build webview
+        run: pnpm --filter apilot-webview exec vite build
+
+      - name: Build extension (esbuild bundle)
+        run: pnpm --filter apilot compile
+
+      - name: Type-check extension tests
+        run: pnpm --filter apilot exec tsc -p tsconfig.test.json
+
+      - name: Run core tests
+        run: pnpm --filter @apilot/core exec vitest run
+
+      - name: Run codegen tests
+        run: pnpm --filter @apilot/codegen exec vitest run
+
+      - name: Verify MCP server starts
+        run: |
+          cd packages/mcp
+          node ../../scripts/verify-mcp.js
+
+      - name: Verify CLI works
+        run: |
+          cd packages/mcp/test-project
+          APilot_secret_authToken="ci-test-token" node ../../cli/dist/index.js run orders.list --env dev 2>&1 | head -3
