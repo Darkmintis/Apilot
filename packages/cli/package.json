@@ -1,0 +1,25 @@
+{
+  "name": "@apilot/cli",
+  "version": "0.1.0",
+  "description": "Apilot CLI — run endpoints, generate code, and check API contracts from the command line.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "apilot": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist",
+    "start": "node dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.6"
+  },
+  "dependencies": {
+    "@apilot/core": "workspace:*",
+    "commander": "^12.1.0",
+    "yaml": "^2.9.1"
+  }
+}
