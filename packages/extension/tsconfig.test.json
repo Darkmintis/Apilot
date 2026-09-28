@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": false,
+    "declaration": false,
+    "declarationMap": false,
+    "outDir": "dist/test",
+    "rootDir": "src/test",
+    "lib": ["ES2022", "DOM"],
+    "types": ["vscode", "node", "mocha"]
+  },
+  "include": ["src/test/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/webview/**"]
+}

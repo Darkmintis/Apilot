@@ -1,0 +1,121 @@
+{
+  "name": "apilot",
+  "displayName": "Apilot",
+  "description": "The API workspace inside your editor, built for AI.",
+  "version": "0.1.0",
+  "publisher": "apilot-dev",
+  "engines": {
+    "vscode": "^1.85.0",
+    "cursor": "^1.0.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "icons": {
+    "default": "assets/icon.svg"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "apilot.openDashboard",
+        "title": "Apilot: Open API Dashboard",
+        "category": "Apilot"
+      },
+      {
+        "command": "apilot.runEndpoint",
+        "title": "Apilot: Run Endpoint",
+        "category": "Apilot"
+      },
+      {
+        "command": "apilot.runAll",
+        "title": "Apilot: Run All Endpoints",
+        "category": "Apilot"
+      },
+      {
+        "command": "apilot.diffEndpoint",
+        "title": "Apilot: Diff Endpoint",
+        "category": "Apilot"
+      },
+      {
+        "command": "apilot.generateCode",
+        "title": "Apilot: Generate Code",
+        "category": "Apilot"
+      },
+      {
+        "command": "apilot.connectAI",
+        "title": "Apilot: Connect to AI (MCP)",
+        "category": "Apilot"
+      },
+      {
+        "command": "apilot.promptSecrets",
+        "title": "Apilot: Enter Missing Secrets",
+        "category": "Apilot"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "apilot.collections",
+          "name": "API Collections"
+        }
+      ]
+    },
+    "viewsWelcome": {
+      "apilot.collections": [
+        {
+          "viewpoint": "notebook",
+          "contents": "## Welcome to Apilot\n\nOpen a folder with an `.apilot/` directory, or run **Apilot: Open API Dashboard** to get started.",
+          "when": "view == apilot.collections"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "apilot.generateCode",
+          "when": "resourceExtname == .yaml || resourceExtname == .json"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Apilot",
+      "properties": {
+        "apilot.autoSnapshot": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically save snapshots for tracked endpoints."
+        },
+        "apilot.defaultTimeout": {
+          "type": "number",
+          "default": 30000,
+          "description": "Default request timeout in milliseconds."
+        }
+      }
+    }
+  },
+  "main": "./dist/extension.js",
+  "scripts": {
+    "compile": "esbuild src/extension.ts --bundle --minify --sourcemap --platform=node --format=cjs --external:vscode --outfile=dist/extension.js",
+    "watch": "esbuild src/extension.ts --bundle --sourcemap --platform=node --format=cjs --external:vscode --outfile=dist/extension.js --watch",
+    "clean": "rm -rf dist",
+    "prepackage": "pnpm compile",
+    "test:compile": "tsc -p tsconfig.test.json",
+    "test": "pnpm test:compile && node ../../scripts/vscode-test.js",
+    "test:watch": "node ../../scripts/vscode-test.js --watch"
+  },
+  "devDependencies": {
+    "@types/glob": "^9.0.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22",
+    "@types/vscode": "^1.85",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.2",
+    "mocha": "^12.0.2",
+    "typescript": "^5.6"
+  },
+  "dependencies": {
+    "@apilot/codegen": "workspace:*",
+    "@apilot/core": "workspace:*",
+    "yaml": "^2.9.1"
+  }
+}
