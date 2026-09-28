@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+.poolside/
+.vscode-test/
+.local/
