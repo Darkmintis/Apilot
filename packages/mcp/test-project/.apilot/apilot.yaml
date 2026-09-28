@@ -1,0 +1,10 @@
+name: sample-store-api
+defaultEnvironment: dev
+codegen:
+  dart:
+    enabled: true
+    output: lib/api
+    flavor: freezed
+  typescript:
+    enabled: true
+    output: src/api

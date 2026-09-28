@@ -1,0 +1,5 @@
+name: dev
+variables:
+  baseUrl: { type: text, value: "https://jsonplaceholder.typicode.com" }
+  authToken: { type: secret }
+  userId: { type: text, value: "1" }

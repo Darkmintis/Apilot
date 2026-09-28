@@ -1,0 +1,12 @@
+name: List orders
+method: GET
+url: "{{baseUrl}}/posts"
+headers:
+  Accept: application/json
+query:
+  userId: "{{userId}}"
+body: null
+expect:
+  status: 200
+after:
+  - set: { postId: "$.[0].id" }

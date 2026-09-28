@@ -1,0 +1,8 @@
+name: Get order by ID
+method: GET
+url: "{{baseUrl}}/posts/{{postId}}"
+headers:
+  Accept: application/json
+body: null
+expect:
+  status: 200
