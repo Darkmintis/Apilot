@@ -1,0 +1,19 @@
+name: apilot_capture
+description: >
+  A Dio interceptor plugin for Apilot — captures API traffic into
+  .apilot/snapshots/ with automatic secret redaction.
+version: 0.1.0
+homepage: https://github.com/apilot-dev/apilot
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  dio: ^5.4.0
+  path: ^1.9.0
+
+dev_dependencies:
+  test: ^1.24.0
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
