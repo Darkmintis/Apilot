@@ -4,7 +4,7 @@
  * Uses Mocha (tdd interface) to run the test suite.
  */
 import * as path from "node:path";
-import * as Mocha from "mocha";
+import Mocha from "mocha";
 import * as fs from "node:fs";
 
 export function run(_folder: string, _id: string): Promise<void> {
