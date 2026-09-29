@@ -6,68 +6,71 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  NODE_VERSION: 20
-  PNPM_VERSION: 11
-
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
         with:
-          fetch-depth: 0
+          version: 11
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: 20
           cache: pnpm
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm -r --filter "./packages/*" --filter "!apilot" --filter "!apilot-webview" build
+
+      - name: Build webview + extension bundle
+        run: |
+          pnpm --filter apilot-webview build
+          pnpm --filter apilot compile
+
+      - name: Unit tests
+        run: |
+          pnpm --filter @apilot/core exec vitest run
+          pnpm --filter @apilot/codegen exec vitest run
+
+      - name: MCP server (source build and the bundle the extension ships)
+        run: |
+          node scripts/verify-mcp.js
+          node scripts/verify-mcp.js packages/extension/dist/mcp.mjs
+
+      - name: Extension integration tests (real VS Code)
+        run: xvfb-run -a pnpm --filter apilot test
+
+      - name: apilot check against the sample project
+        working-directory: packages/mcp/test-project
+        env:
+          APILOT_SECRET_authToken: ci-test-token
+        run: node ../../cli/dist/index.js check --env dev --markdown "$GITHUB_STEP_SUMMARY"
+
+      - name: Package extension
+        run: pnpm --filter apilot exec vsce package --no-dependencies
+
+      - uses: actions/upload-artifact@v4
         with:
-          version: ${{ env.PNPM_VERSION }}
+          name: apilot-vsix
+          path: packages/extension/*.vsix
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build core (no editor deps)
-        run: pnpm --filter @apilot/core exec tsc -b --force
-
-      - name: Build codegen
-        run: pnpm --filter @apilot/codegen exec tsc -b --force
-
-      - name: Build skill
-        run: pnpm --filter @apilot/skill exec tsc -b --force
-
-      - name: Build MCP server
-        run: pnpm --filter @apilot/mcp exec tsc -b --force
-
-      - name: Build CLI
-        run: pnpm --filter @apilot/cli exec tsc -b --force
-
-      - name: Build webview
-        run: pnpm --filter apilot-webview exec vite build
-
-      - name: Build extension (esbuild bundle)
-        run: pnpm --filter apilot compile
-
-      - name: Type-check extension tests
-        run: pnpm --filter apilot exec tsc -p tsconfig.test.json
-
-      - name: Run core tests
-        run: pnpm --filter @apilot/core exec vitest run
-
-      - name: Run codegen tests
-        run: pnpm --filter @apilot/codegen exec vitest run
-
-      - name: Verify MCP server starts
-        run: |
-          cd packages/mcp
-          node ../../scripts/verify-mcp.js
-
-      - name: Verify CLI works
-        run: |
-          cd packages/mcp/test-project
-          APilot_secret_authToken="ci-test-token" node ../../cli/dist/index.js run orders.list --env dev 2>&1 | head -3
+  dart-codegen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dart-lang/setup-dart@v1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter @apilot/codegen... build
+      - name: Generated Dart compiles, passes analyze, and round-trips JSON
+        run: node scripts/verify-dart-codegen.mjs
