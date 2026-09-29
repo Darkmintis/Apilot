@@ -34,6 +34,7 @@ export class SchemaBuilder {
 
     // If all non-null samples share the same type, infer it
     const types = new Set(nonNull.map(typeOf));
+    if (types.size === 2 && types.has("integer") && types.has("number")) types.delete("integer");
 
     if (types.size === 1) {
       const t = types.values().next().value as string;
@@ -51,10 +52,13 @@ export class SchemaBuilder {
             required: [],
             nullable: hasNull,
           };
-          // Enum detection
+          // Enum = a small set of values that keep repeating (status, role, …).
+          // ponytail: sample-based heuristic; hand-edited schemas are the upgrade path.
           const vals = new Set(nonNull as string[]);
-          if (vals.size <= 20 && nonNull.length >= 3) {
-            schema.enum = [...vals];
+          if ([...vals].every((v) => ISO_DATE_TIME.test(v))) schema.format = "date-time";
+          else if ([...vals].every((v) => ISO_DATE.test(v))) schema.format = "date";
+          else if (nonNull.length >= 4 && vals.size <= 10 && vals.size <= Math.ceil(nonNull.length * 0.6) && [...vals].every((v) => v.length <= 40)) {
+            schema.enum = [...vals].sort();
           }
           return schema;
         }
@@ -144,17 +148,6 @@ export function inferSchema(value: unknown): ApilotSchema {
   return new SchemaBuilder().infer([value]);
 }
 
-/** Merge two schemas (used for diff classification). */
-export function mergeSchemas(a: ApilotSchema, b: ApilotSchema): ApilotSchema {
-  // For now, return a simple merge — the differ handles the real comparison
-  return {
-    ...a,
-    nullable: a.nullable || b.nullable,
-    required: [...new Set([...a.required, ...b.required])],
-    properties: { ...a.properties, ...b.properties },
-  };
-}
-
 export function schemaToJsonSchema(schema: ApilotSchema): object {
   const result: Record<string, unknown> = {
     type: schema.type ?? "object",
@@ -174,14 +167,21 @@ export function schemaToJsonSchema(schema: ApilotSchema): object {
   if (schema.enum) {
     result.enum = schema.enum;
   }
+  if (schema.format) {
+    result.format = schema.format;
+  }
   if (schema.description) {
     result.description = schema.description;
   }
   return result;
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
 function typeOf(val: unknown): string {
   if (val === null) return "null";
   if (Array.isArray(val)) return "array";
+  if (typeof val === "number") return Number.isInteger(val) ? "integer" : "number";
   return typeof val;
 }

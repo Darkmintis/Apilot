@@ -9,7 +9,7 @@ describe("SchemaBuilder", () => {
     expect(schema.type).toBe("object");
     expect(schema.required).toEqual(["id", "name", "active"]);
     expect(schema.properties).toBeDefined();
-    expect(schema.properties!["id"].type).toBe("number");
+    expect(schema.properties!["id"].type).toBe("integer");
     expect(schema.properties!["name"].type).toBe("string");
     expect(schema.properties!["active"].type).toBe("boolean");
   });
@@ -33,13 +33,22 @@ describe("SchemaBuilder", () => {
     expect(schema.enum).toContain("pending");
   });
 
+  it("detects ISO dates and date-times (never as enums)", () => {
+    const b = new SchemaBuilder();
+    expect(b.infer(["2024-05-01T10:00:00Z", "2024-05-01T10:00:00.5+05:45", "2024-05-01T10:00:00Z", "2024-05-01T10:00:00Z"])).toMatchObject({ type: "string", format: "date-time" });
+    expect(b.infer(["2024-05-01", "2024-05-02"])).toMatchObject({ format: "date" });
+    expect(b.infer(["2024-05-01", "tomorrow"]).format).toBeUndefined();
+    expect(b.infer(["2024-05-01T10:00:00Z", "2024-05-01T10:00:00Z", "2024-05-01T10:00:00Z", "2024-05-01T10:00:00Z"]).enum).toBeUndefined();
+  });
+
   it("handles arrays with element schemas", () => {
     const schema = new SchemaBuilder().infer([
-      [1, 2, 3],
+      [1, 2, 3.5],
     ]);
     expect(schema.type).toBe("array");
     expect(schema.items).toBeDefined();
-    expect(schema.items!.type).toBe("number");
+    expect(schema.items!.type).toBe("number"); // ints + decimals widen to number
+    expect(new SchemaBuilder().infer([[1, 2]]).items!.type).toBe("integer");
   });
 
   it("handles null input", () => {
