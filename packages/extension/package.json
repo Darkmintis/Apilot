@@ -1,121 +1,146 @@
 {
   "name": "apilot",
   "displayName": "Apilot",
-  "description": "The API workspace inside your editor, built for AI.",
+  "description": "Your API requests and real responses, versioned in the codebase. GitHub-style response diffs with breaking-change alerts, typed model generation, and an AI assistant that knows your API.",
   "version": "0.1.0",
   "publisher": "apilot-dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Darkmintis/Apilot.git",
+    "directory": "packages/extension"
+  },
+  "bugs": "https://github.com/Darkmintis/Apilot/issues",
+  "homepage": "https://github.com/Darkmintis/Apilot#readme",
+  "icon": "assets/icon.png",
   "engines": {
-    "vscode": "^1.85.0",
-    "cursor": "^1.0.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
+    "Testing",
+    "Programming Languages",
+    "AI",
     "Other"
   ],
-  "icons": {
-    "default": "assets/icon.svg"
-  },
+  "keywords": [
+    "api",
+    "rest",
+    "http",
+    "diff",
+    "snapshot",
+    "mcp",
+    "codegen",
+    "flutter",
+    "dart"
+  ],
+  "activationEvents": [
+    "workspaceContains:.apilot/apilot.yaml",
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
   "contributes": {
-    "commands": [
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "apilot",
+          "title": "Apilot",
+          "icon": "assets/apilot.svg"
+        }
+      ]
+    },
+    "views": {
+      "apilot": [
+        {
+          "id": "apilot.endpoints",
+          "name": "Endpoints"
+        }
+      ]
+    },
+    "viewsWelcome": [
       {
-        "command": "apilot.openDashboard",
-        "title": "Apilot: Open API Dashboard",
-        "category": "Apilot"
+        "view": "apilot.endpoints",
+        "contents": "Keep your API requests and real responses in this repo. Apilot alerts you when a response shape changes and generates typed models.\n[Initialize Apilot Project](command:apilot.init)\nAlready have requests? Import from cURL, Postman, or OpenAPI.\n[Import…](command:apilot.import)",
+        "when": "workbenchState != empty && !apilot.hasProject"
       },
       {
-        "command": "apilot.runEndpoint",
-        "title": "Apilot: Run Endpoint",
-        "category": "Apilot"
-      },
-      {
-        "command": "apilot.runAll",
-        "title": "Apilot: Run All Endpoints",
-        "category": "Apilot"
-      },
-      {
-        "command": "apilot.diffEndpoint",
-        "title": "Apilot: Diff Endpoint",
-        "category": "Apilot"
-      },
-      {
-        "command": "apilot.generateCode",
-        "title": "Apilot: Generate Code",
-        "category": "Apilot"
-      },
-      {
-        "command": "apilot.connectAI",
-        "title": "Apilot: Connect to AI (MCP)",
-        "category": "Apilot"
-      },
-      {
-        "command": "apilot.promptSecrets",
-        "title": "Apilot: Enter Missing Secrets",
-        "category": "Apilot"
+        "view": "apilot.endpoints",
+        "contents": "Open a folder to use Apilot.\n[Open Folder](command:workbench.action.files.openFolder)",
+        "when": "workbenchState == empty"
       }
     ],
-    "views": {
-      "explorer": [
-        {
-          "id": "apilot.collections",
-          "name": "API Collections"
-        }
-      ]
-    },
-    "viewsWelcome": {
-      "apilot.collections": [
-        {
-          "viewpoint": "notebook",
-          "contents": "## Welcome to Apilot\n\nOpen a folder with an `.apilot/` directory, or run **Apilot: Open API Dashboard** to get started.",
-          "when": "view == apilot.collections"
-        }
-      ]
-    },
+    "commands": [
+      { "command": "apilot.open", "title": "Open Panel", "category": "Apilot", "icon": "$(window)" },
+      { "command": "apilot.init", "title": "Initialize Project", "category": "Apilot" },
+      { "command": "apilot.newEndpoint", "title": "New Endpoint", "category": "Apilot", "icon": "$(add)" },
+      { "command": "apilot.import", "title": "Import from cURL / Postman / OpenAPI", "category": "Apilot", "icon": "$(cloud-download)" },
+      { "command": "apilot.environments", "title": "Environments & Secrets", "category": "Apilot", "icon": "$(key)" },
+      { "command": "apilot.runAll", "title": "Run All Endpoints", "category": "Apilot", "icon": "$(run-all)" },
+      { "command": "apilot.runEndpoint", "title": "Run Endpoint", "category": "Apilot", "icon": "$(play)" },
+      { "command": "apilot.openFile", "title": "Open Endpoint File", "category": "Apilot", "icon": "$(go-to-file)" },
+      { "command": "apilot.refresh", "title": "Refresh", "category": "Apilot", "icon": "$(refresh)" },
+      { "command": "apilot.setupAi", "title": "Set Up AI Assistant (skills + MCP)", "category": "Apilot" },
+      { "command": "apilot.removeAi", "title": "Remove AI Assistant Setup", "category": "Apilot" }
+    ],
     "menus": {
-      "editor/context": [
-        {
-          "command": "apilot.generateCode",
-          "when": "resourceExtname == .yaml || resourceExtname == .json"
-        }
+      "view/title": [
+        { "command": "apilot.open", "when": "view == apilot.endpoints && apilot.hasProject", "group": "navigation@1" },
+        { "command": "apilot.newEndpoint", "when": "view == apilot.endpoints && apilot.hasProject", "group": "navigation@2" },
+        { "command": "apilot.runAll", "when": "view == apilot.endpoints && apilot.hasProject", "group": "navigation@3" },
+        { "command": "apilot.refresh", "when": "view == apilot.endpoints", "group": "navigation@4" },
+        { "command": "apilot.import", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@1" },
+        { "command": "apilot.environments", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@2" },
+        { "command": "apilot.setupAi", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@3" }
+      ],
+      "view/item/context": [
+        { "command": "apilot.runEndpoint", "when": "view == apilot.endpoints && viewItem == endpoint", "group": "inline@1" },
+        { "command": "apilot.openFile", "when": "view == apilot.endpoints && viewItem == endpoint", "group": "inline@2" }
+      ],
+      "commandPalette": [
+        { "command": "apilot.runEndpoint", "when": "false" },
+        { "command": "apilot.openFile", "when": "false" },
+        { "command": "apilot.init", "when": "!apilot.hasProject" }
       ]
     },
+    "mcpServerDefinitionProviders": [
+      { "id": "apilot.mcp", "label": "Apilot" }
+    ],
     "configuration": {
       "title": "Apilot",
       "properties": {
-        "apilot.autoSnapshot": {
+        "apilot.ai.autoSetup": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically save snapshots for tracked endpoints."
+          "description": "Automatically add Apilot skills for Cursor, Claude Code, and Copilot to this project and register the Apilot MCP server with the editor."
         },
-        "apilot.defaultTimeout": {
+        "apilot.timeout": {
           "type": "number",
           "default": 30000,
-          "description": "Default request timeout in milliseconds."
+          "minimum": 1000,
+          "description": "Request timeout in milliseconds."
         }
       }
     }
   },
-  "main": "./dist/extension.js",
   "scripts": {
-    "compile": "esbuild src/extension.ts --bundle --minify --sourcemap --platform=node --format=cjs --external:vscode --outfile=dist/extension.js",
-    "watch": "esbuild src/extension.ts --bundle --sourcemap --platform=node --format=cjs --external:vscode --outfile=dist/extension.js --watch",
+    "compile": "node build.mjs",
+    "watch": "node build.mjs --watch",
     "clean": "rm -rf dist",
-    "prepackage": "pnpm compile",
+    "package": "pnpm --filter @apilot/webview build && node build.mjs --production && vsce package --no-dependencies",
     "test:compile": "tsc -p tsconfig.test.json",
-    "test": "pnpm test:compile && node ../../scripts/vscode-test.js",
-    "test:watch": "node ../../scripts/vscode-test.js --watch"
+    "test": "pnpm test:compile && node scripts/vscode-test.js"
   },
   "devDependencies": {
-    "@types/glob": "^9.0.0",
+    "@apilot/codegen": "workspace:*",
+    "@apilot/core": "workspace:*",
+    "@apilot/mcp": "workspace:*",
+    "@apilot/skill": "workspace:*",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22",
-    "@types/vscode": "^1.85",
+    "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.28.2",
     "mocha": "^12.0.2",
     "typescript": "^5.6"
-  },
-  "dependencies": {
-    "@apilot/codegen": "workspace:*",
-    "@apilot/core": "workspace:*",
-    "yaml": "^2.9.1"
   }
 }
