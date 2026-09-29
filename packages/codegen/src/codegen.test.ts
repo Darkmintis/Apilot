@@ -1,136 +1,194 @@
 import { describe, it, expect } from "vitest";
-import { CodegenEngine, camelCase, snakeCase, pascalCase } from "../src/index";
-import { inferSchema } from "@apilot/core";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SchemaBuilder } from "@apilot/core";
+import { render, collectModels, writeGenerated, camel, pascal, fileName, singular, type EndpointSpec } from "../src/index";
 
-describe("CodegenEngine", () => {
-  const engine = new CodegenEngine();
+// Two real samples: `email` is sometimes null, `nickname` sometimes missing.
+const schema = new SchemaBuilder().infer([
+  [{ id: 1, full_name: "Alice", active: true, email: "a@x.io", score: 1.5, tags: ["dev"], profile: { bio: "Hi", followers: 42 } }],
+  [{ id: 2, full_name: "Bob", active: false, email: null, score: 2, tags: [], profile: { bio: "Yo", followers: 7 }, nickname: "bobby" }],
+]);
 
-  const schema = inferSchema({
-    id: 1,
-    name: "Alice",
-    active: true,
-    email: null,
-    tags: ["dev", "admin"],
-    profile: {
-      bio: "Hello",
-      followers: 42,
-    },
+const spec: EndpointSpec = { id: "users.list", name: "List users", method: "GET", url: "{{baseUrl}}/teams/{{teamId}}/users", schema };
+
+// Richer samples: enum, dates, two fields with the same shape, id-keyed map, plural arrays.
+const person = (n: number) => ({ id: n, name: `P${n}` });
+const rich = new SchemaBuilder().infer([
+  { data: [
+    { id: 1, status: "draft", created_at: "2024-05-01T10:00:00Z", due: "2024-06-01", author: person(1), editor: person(2), categories: [{ slug: "a" }], by_id: { "17": { n: 1 }, "42": { n: 2 } } },
+    { id: 2, status: "live", created_at: "2024-05-02T10:00:00.5+05:45", due: "2024-06-02", author: person(3), editor: person(4), categories: [], by_id: { "5": { n: 3 }, "6": { n: 4 } } },
+    { id: 3, status: "live", created_at: "2024-05-03T10:00:00Z", due: "2024-06-03", author: person(5), editor: person(6), categories: [{ slug: "b" }], by_id: { "7": { n: 5 }, "8": { n: 6 } } },
+    { id: 4, status: "in_review", created_at: "2024-05-04T10:00:00Z", due: "2024-06-04", author: person(7), editor: person(8), categories: [], by_id: { "9": { n: 7 }, "10": { n: 8 } } },
+    { id: 5, status: "draft", created_at: "2024-05-05T10:00:00Z", due: "2024-06-05", author: person(9), editor: person(10), categories: [], by_id: { "11": { n: 9 }, "12": { n: 10 } } },
+  ] },
+]);
+const richSpec: EndpointSpec = { id: "posts.list", name: "List posts", method: "GET", url: "{{baseUrl}}/posts", schema: rich };
+
+describe("collectModels", () => {
+  it("names nested models and orders children first", () => {
+    const { root, models } = collectModels(schema, "UsersList", "User");
+    expect(root).toEqual({ k: "list", of: { k: "model", name: "User" } });
+    expect(models.map((m) => m.name)).toEqual(["Profile", "User"]);
+    const fields = Object.fromEntries(models[1]!.fields.map((f) => [f.key, f]));
+    expect(fields.full_name).toMatchObject({ name: "fullName", required: true, nullable: false });
+    expect(fields.email).toMatchObject({ required: false, nullable: true });
+    expect(fields.nickname).toMatchObject({ required: false, nullable: false });
   });
 
-  it("generates Dart (freezed) code", () => {
-    const files = engine.generate({
-      endpointId: "users.list",
-      endpointName: "List users",
-      method: "GET",
-      url: "https://api.example.com/users",
-      schema,
-      outputPath: "lib/api",
-      language: "dart",
-      flavor: "freezed",
-    });
-    expect(files.length).toBe(2);
-    expect(files[0].language).toBe("dart");
-    expect(files[0].content).toContain("class UsersList");
-    expect(files[0].content).toContain("String name");
-    expect(files[0].content).toContain("bool active");
-    expect(files[0].content).toContain("dynamic? email");
-    expect(files[1].content).toContain("UsersListApi");
+  it("merges identical shapes, singularizes arrays, detects enums, dates, and id-keyed maps", () => {
+    const { models, enums } = collectModels(rich, "PostsList", "Post");
+    const names = models.map((m) => m.name);
+    expect(names).toContain("Author");
+    expect(names).not.toContain("Editor");
+    expect(names).toContain("Category");
+    expect(names).toContain("Post");
+    expect(enums).toEqual([{ name: "Status", values: ["draft", "in_review", "live"] }]);
+    const post = models.find((m) => m.name === "Post")!;
+    const f = Object.fromEntries(post.fields.map((x) => [x.key, x.type]));
+    expect(f.created_at).toEqual({ k: "date" });
+    expect(f.due).toEqual({ k: "date" });
+    expect(f.editor).toEqual({ k: "model", name: "Author" });
+    expect(f.by_id).toMatchObject({ k: "map", of: { k: "model" } });
+    expect(f.status).toEqual({ k: "enum", name: "Status" });
   });
 
-  it("generates TypeScript (zod) code", () => {
-    const files = engine.generate({
-      endpointId: "users.list",
-      endpointName: "List users",
-      method: "GET",
-      url: "https://api.example.com/users",
-      schema,
-      outputPath: "src/api",
-      language: "typescript",
-    });
-    expect(files[0].language).toBe("typescript");
-    expect(files[0].content).toContain("export interface UsersList");
-    expect(files[0].content).toContain("name:");
-    expect(files[1].content).toContain("callApi");
-  });
-
-  it("generates Kotlin data class code", () => {
-    const files = engine.generate({
-      endpointId: "users.list",
-      endpointName: "List users",
-      method: "POST",
-      url: "https://api.example.com/users",
-      schema,
-      outputPath: "src/main/kotlin",
-      language: "kotlin",
-    });
-    expect(files[0].language).toBe("kotlin");
-    expect(files[0].content).toContain("data class UsersList");
-    expect(files[0].content).toContain("@SerialName");
-  });
-
-  it("generates Swift Codable code", () => {
-    const files = engine.generate({
-      endpointId: "users.list",
-      endpointName: "List users",
-      method: "GET",
-      url: "https://api.example.com/users",
-      schema,
-      outputPath: "iOS/Models",
-      language: "swift",
-    });
-    expect(files[0].language).toBe("swift");
-    expect(files[0].content).toContain("struct UsersList: Codable");
-    expect(files[0].content).toContain("CodingKeys");
-  });
-
-  it("detects unknown language", () => {
-    expect(() =>
-      engine.generate({
-        endpointId: "test",
-        endpointName: "Test",
-        method: "GET",
-        url: "/test",
-        schema,
-        outputPath: "out",
-        // @ts-expect-error testing failure
-        language: "rust",
-      })
-    ).toThrow(/No codegen template/);
-  });
-
-  it("diff-aware generation detects changes", () => {
-    const opts = {
-      endpointId: "test",
-      endpointName: "Test",
-      method: "GET",
-      url: "/test",
-      schema,
-      outputPath: "out",
-      language: "dart",
-    };
-    const r1 = engine.generateDiff(opts, undefined);
-    expect(r1.changed).toBe(true);
-
-    const r2 = engine.generateDiff(opts, schema);
-    // Same schema → no changes
-    expect(r2.changed).toBe(false);
-    expect(r2.files).toHaveLength(0);
+  it("does not turn free text or a single repeated value into an enum", () => {
+    const s = new SchemaBuilder().infer([[1, 2, 3, 4].map((id) => ({ id, kind: "post", title: `Title ${id}` }))]);
+    const { enums } = collectModels(s, "X");
+    expect(enums).toEqual([]);
   });
 });
 
-describe("Name helpers", () => {
-  it("camelCase converts snake_case", () => {
-    expect(camelCase("order_id")).toBe("orderId");
-    expect(camelCase("first_name")).toBe("firstName");
+describe("render", () => {
+  it("Dart freezed: valid factory, JsonKey renames, nullable optionals, Dio call", () => {
+    const out = render(spec, "dart");
+    expect(out).toContain("GENERATED BY APILOT");
+    expect(out).toContain("part 'users_list.freezed.dart';");
+    expect(out).toContain("abstract class User with _$User {");
+    expect(out).toContain("@JsonKey(name: 'full_name') required String fullName,");
+    expect(out).toContain("String? email,");
+    expect(out).toContain("required double score,");
+    expect(out).toContain("required Profile profile,");
+    expect(out).toContain("required String teamId,");
+    expect(out).toContain("'/teams/${teamId}/users'");
+    expect(out).toContain("Future<List<User>> call({");
   });
 
-  it("snakeCase converts camelCase", () => {
-    expect(snakeCase("orderId")).toBe("order_id");
+  it("Dart freezed: enums with unknown fallback, DateTime, maps, shared classes", () => {
+    const out = render(richSpec, "dart");
+    expect(out).toContain("@JsonEnum(valueField: 'jsonValue')\nenum Status {");
+    expect(out).toContain("  inReview('in_review'),");
+    expect(out).toContain("  unknown('');");
+    expect(out).toContain("@JsonKey(unknownEnumValue: Status.unknown) required Status status,");
+    expect(out).toContain("@JsonKey(name: 'created_at') required DateTime createdAt,");
+    expect(out).toContain("required Author editor,");
+    expect(out).toContain("required List<Category> categories,");
+    expect(out).toMatch(/@JsonKey\(name: 'by_id'\) required Map<String, \w+> byId,/);
+    expect(out).toContain("abstract class PostsList with _$PostsList {");
+    expect(out).toContain("required List<Post> data,");
   });
 
-  it("pascalCase converts snake_case", () => {
-    expect(pascalCase("order_id")).toBe("OrderId");
-    expect(pascalCase("orders.list")).toBe("OrdersList");
-    expect(pascalCase("users.list")).toBe("UsersList");
+  it("Dart plain: hand-written style fromJson/toJson/copyWith", () => {
+    const out = render(spec, "dart", { flavor: "plain" });
+    expect(out).not.toContain("freezed");
+    expect(out).toContain("email: json['email'] == null ? null : json['email'] as String,");
+    expect(out).toContain("'profile': profile.toJson(),");
+    expect(out).toContain("User copyWith({");
+    const richOut = render(richSpec, "dart", { flavor: "plain" });
+    expect(richOut).toContain("createdAt: DateTime.parse(json['created_at'] as String),");
+    expect(richOut).toContain("'created_at': createdAt.toIso8601String(),");
+    expect(richOut).toContain("status: Status.fromJson(json['status'] as String),");
+    expect(richOut).toContain("static Status fromJson(String value) => values.firstWhere((e) => e.jsonValue == value, orElse: () => unknown);");
+    expect(richOut).toMatch(/byId: \(json\['by_id'\] as Map<String, dynamic>\)\.map\(\(k, e\) => MapEntry\(k, \w+\.fromJson\(e as Map<String, dynamic>\)\)\),/);
+  });
+
+  it("TypeScript: zod schemas with optional/nullable modifiers and typed fetch", () => {
+    const out = render(spec, "typescript");
+    expect(out).toContain('import { z } from "zod";');
+    expect(out).toContain("full_name: z.string(),");
+    expect(out).toContain("email: z.string().nullish(),");
+    expect(out).toContain("nickname: z.string().optional(),");
+    expect(out).toContain("id: z.number().int(),");
+    expect(out).toContain("export const UsersListSchema = z.array(UserSchema);");
+    expect(out).toContain("params: { teamId: string | number };");
+    expect(out).toContain("encodeURIComponent(String(req.params.teamId))");
+    expect(out).toContain("export async function usersList(req: UsersListRequest): Promise<UsersList>");
+    const richOut = render(richSpec, "typescript");
+    expect(richOut).toContain('export const StatusSchema = z.enum(["draft", "in_review", "live", "unknown"]).catch("unknown");');
+    expect(richOut).toContain("created_at: z.coerce.date(),");
+    expect(richOut).toContain("editor: AuthorSchema,");
+    expect(richOut).toMatch(/by_id: z\.record\(z\.string\(\), \w+Schema\),/);
+  });
+
+  it("Kotlin: serializable data classes + Retrofit, enums with fallback serializer", () => {
+    const out = render(spec, "kotlin");
+    expect(out).toContain('@SerialName("full_name") val fullName: String,');
+    expect(out).toContain('@SerialName("email") val email: String? = null,');
+    expect(out).toContain('@GET("teams/{teamId}/users")');
+    expect(out).toContain('@Path("teamId") teamId: String,');
+    expect(out).toContain("): List<User>");
+    expect(out).not.toContain("KSerializer");
+    const richOut = render(richSpec, "kotlin");
+    expect(richOut).toContain("enum class Status(val value: String) {");
+    expect(richOut).toContain('    IN_REVIEW("in_review"),');
+    expect(richOut).toContain("?: Status.UNKNOWN");
+    expect(richOut).toContain("import kotlinx.serialization.KSerializer");
+  });
+
+  it("Swift: Codable structs + URLSession, enums with fallback", () => {
+    const out = render(spec, "swift");
+    expect(out).toContain("struct User: Codable, Equatable {");
+    expect(out).toContain('case fullName = "full_name"');
+    expect(out).toContain("let email: String?");
+    expect(out).toContain('appendingPathComponent("teams/\\(teamId)/users")');
+    expect(out).not.toContain("JSONValue");
+    const richOut = render(richSpec, "swift");
+    expect(richOut).toContain("enum Status: String, Codable, Equatable {");
+    expect(richOut).toContain('    case inReview = "in_review"');
+    expect(richOut).toContain("?? .unknown");
+  });
+
+  it("sanitizes reserved words and odd keys", () => {
+    const s = new SchemaBuilder().infer([{ class: "a", "2fa": true, "x-rate": 1, hashCode: 3 }]);
+    const out = render({ ...spec, id: "misc.get", url: "/misc", schema: s }, "dart");
+    expect(out).toContain("@JsonKey(name: 'class') required String classValue,");
+    expect(out).toContain("@JsonKey(name: '2fa') required bool n2fa,");
+    expect(out).toContain("@JsonKey(name: 'x-rate') required int xRate,");
+    expect(out).toContain("@JsonKey(name: 'hashCode') required int hashCodeValue,");
+  });
+});
+
+describe("writeGenerated", () => {
+  it("never overwrites hand-written files and skips unchanged output", () => {
+    const root = mkdtempSync(join(tmpdir(), "apilot-cg-"));
+    const content = render(spec, "dart");
+    mkdirSync(join(root, "lib"), { recursive: true });
+    writeFileSync(join(root, "lib/custom.dart"), "// mine\n");
+
+    const first = writeGenerated(root, [
+      { path: "lib/users_list.dart", content, language: "dart" },
+      { path: "lib/custom.dart", content, language: "dart" },
+    ]);
+    expect(first).toEqual({ written: ["lib/users_list.dart"], unchanged: [], skipped: ["lib/custom.dart"] });
+    expect(readFileSync(join(root, "lib/custom.dart"), "utf-8")).toBe("// mine\n");
+
+    const again = writeGenerated(root, [{ path: "lib/users_list.dart", content, language: "dart" }]);
+    expect(again.unchanged).toEqual(["lib/users_list.dart"]);
+  });
+});
+
+describe("names", () => {
+  it("converts cases", () => {
+    expect(camel("order_id")).toBe("orderId");
+    expect(camel("createdAt")).toBe("createdAt");
+    expect(pascal("orders.list")).toBe("OrdersList");
+    expect(fileName("orders/admin.list-all", "dart")).toBe("orders_admin_list_all.dart");
+    expect(fileName("orders.list", "typescript")).toBe("ordersList.ts");
+  });
+
+  it("singularizes common plurals", () => {
+    expect(["orders", "categories", "boxes", "addresses", "status", "data", "news", "keys"].map(singular)).toEqual(["order", "category", "box", "address", "status", "data", "news", "key"]);
   });
 });
