@@ -50,11 +50,18 @@ describe("Redactor", () => {
     expect((result.user as Record<string, unknown>).token).not.toBe("super-secret-token-123");
   });
 
+  it("masks unknown values under sensitive keys", () => {
+    const result = redactor.redactObject({ data: [{ secret: "hidden", refreshToken: "abc" }] }) as any;
+    expect(result.data[0].secret).toBe("⟦REDACTED⟧");
+    expect(result.data[0].refreshToken).toBe("⟦REDACTED⟧");
+  });
+
   it("does not mutate non-sensitive fields", () => {
-    const obj = { name: "Alice", id: 1 };
+    const obj = { name: "Alice", id: 1, sortKey: "name" };
     const result = redactor.redactObject(obj) as Record<string, unknown>;
     expect(result.name).toBe("Alice");
     expect(result.id).toBe(1);
+    expect(result.sortKey).toBe("name");
   });
 
   it("handles empty secret values gracefully", () => {

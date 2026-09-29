@@ -49,7 +49,7 @@ export class Redactor {
     // the exact value.
     this.patterns = [
       // JWT
-      /eyJ[A-Za-z0-9_-]+\.[eyJ[A-Za-z0-9_-]+\.]?[A-Za-z0-9_-]+/g,
+      /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
       // Bearer ...
       /Bearer\s+[\w.-]+/gi,
       // AWS-style keys
@@ -104,8 +104,8 @@ export class Redactor {
       const result: Record<string, unknown> = {};
       for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
         // mask sensitive keys by name
-        if (typeof val === "string" && this.isSensitiveKey(key)) {
-          result[key] = this.redactString(val);
+        if (typeof val === "string" && val.length > 0 && this.isSensitiveKey(key)) {
+          result[key] = this.replacement;
         } else {
           result[key] = this.redactObject(val);
         }
@@ -116,19 +116,6 @@ export class Redactor {
   }
 
   isSensitiveKey(key: string): boolean {
-    const lower = key.toLowerCase();
-    return (
-      lower === "password" ||
-      lower === "token" ||
-      lower === "secret" ||
-      lower === "apikey" ||
-      lower === "api-key" ||
-      lower === "authorization" ||
-      lower === "auth" ||
-      lower.endsWith("token") ||
-      lower.endsWith("secret") ||
-      lower.endsWith("password") ||
-      lower.endsWith("key")
-    );
+    return /(password|passwd|secret|token|api[_-]?key|authorization|private[_-]?key|access[_-]?key)$/i.test(key);
   }
 }
