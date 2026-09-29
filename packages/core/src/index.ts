@@ -5,10 +5,8 @@
  * The extension, MCP server, and CLI all depend on this package.
  */
 
-// Types
 export * from "./types.js";
 
-// File format
 export {
   Registry,
   NodeFileResolver,
@@ -18,33 +16,26 @@ export {
   type FileResolver,
 } from "./file-format.js";
 
-// Variables
-export {
-  resolveContext,
-  interpolate,
-  referencedVars,
-  VariableError,
-  type SecretResolver,
-} from "./variables.js";
-
-// Redaction
+export { interpolate, referencedVars, VariableError } from "./variables.js";
 export { Redactor, type RedactionOptions } from "./redaction.js";
-
-// Runner
-export { RequestRunner, RunnerError, cryptoId } from "./runner.js";
-
-// Snapshots
-export {
-  JsonSnapshotStore,
-  type SnapshotStore,
-  type SnapshotStoreConfig,
-} from "./snapshots.js";
-
-// Diff engine
+export { RequestRunner, RunnerError } from "./runner.js";
+export { SnapshotStore } from "./snapshots.js";
 export { Differ, type DiffOptions, type DiffClassifier } from "./differ.js";
+export { SchemaBuilder, inferSchema, schemaToJsonSchema } from "./schema.js";
 
-// Schema
-export { SchemaBuilder, inferSchema, mergeSchemas, schemaToJsonSchema } from "./schema.js";
+export {
+  Workspace,
+  envSecrets,
+  jsonPath,
+  slugify,
+  revisionChanges,
+  type SecretProvider,
+  type WorkspaceOptions,
+  type EndpointInput,
+  type VariableInfo,
+  type RunOutcome,
+  type RunAllItem,
+  type ImpactMatch,
+} from "./workspace.js";
 
-// Assertions
-export { AssertionEngine, type Assertion, type AssertionResult } from "./assertions.js";
+export { importSpec, tokenizeShell, type ImportSource, type ImportResult } from "./importers.js";
