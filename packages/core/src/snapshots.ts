@@ -1,201 +1,137 @@
 /**
- * Snapshot manager.
+ * Snapshot store.
  *
- * Stores redacted snapshots under .apilot/snapshots/<endpointId>/<iso-timestamp>.json
+ * Layout: .apilot/snapshots/<endpointId>/<timestamp>.<id>.json
+ *         .apilot/snapshots/<endpointId>/baseline   (contains the baseline snapshot id)
  *
- * Retention policy (from spec 7.3):
- *  - keep the last N (default 20)
- *  - always keep "baseline" snapshots
- *
- * All snapshots are redacted before writing.
+ * Retention (master plan §7.3): keep the newest N plus the baseline.
+ * Everything is redacted before it touches disk.
  */
 
-import type {
-  SnapshotMeta,
-  SnapshotRaw,
-  SnapshotRedacted,
-} from "./types.js";
-import { Redactor, type RedactionOptions } from "./redaction.js";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { SnapshotMeta, SnapshotRaw, SnapshotRedacted } from "./types.js";
+import { Redactor } from "./redaction.js";
 
-export interface SnapshotStore {
-  /** Persist a snapshot (redacted). */
-  save(raw: SnapshotRaw, opts: RedactionOptions): Promise<SnapshotMeta>;
-  /** Load a snapshot by id. */
-  load(id: string): Promise<SnapshotRedacted | undefined>;
-  /** List snapshots for an endpoint, newest first. */
-  list(endpointId: string): Promise<SnapshotMeta[]>;
-  /** Get the latest snapshot for an endpoint. */
-  latest(endpointId: string): Promise<SnapshotRedacted | undefined>;
-  /** Get a baseline snapshot (manually or latest). */
-  baseline(endpointId: string): Promise<SnapshotRedacted | undefined>;
-  /** Delete a snapshot. */
-  delete(id: string): Promise<void>;
-}
+export class SnapshotStore {
+  constructor(
+    /** absolute path of the .apilot folder */
+    private readonly apilotDir: string,
+    private readonly retention = 20
+  ) {}
 
-export interface SnapshotStoreConfig {
-  /** root directory (the .apilot folder path) */
-  root: string;
-  /** max snapshots to keep per endpoint (non-baseline). default 20 */
-  retention: number;
-  /** write function — injected so core stays fs-agnostic for testing */
-  writeFile: (relPath: string, content: string) => Promise<void>;
-  readFile: (relPath: string) => Promise<string | undefined>;
-  listDir: (relPath: string) => Promise<string[]>;
-  deleteFile: (relPath: string) => Promise<void>;
-  ensureDir: (relPath: string) => Promise<void>;
-}
-
-export class JsonSnapshotStore implements SnapshotStore {
-  private readonly cfg: SnapshotStoreConfig;
-
-  constructor(cfg: SnapshotStoreConfig) {
-    this.cfg = { ...cfg, retention: cfg.retention ?? 20 };
+  dir(endpointId: string): string {
+    return join(this.apilotDir, "snapshots", ...endpointId.split("/"));
   }
 
-  async save(
-    raw: SnapshotRaw,
-    opts: RedactionOptions
-  ): Promise<SnapshotMeta> {
-    const redactor = new Redactor(opts);
+  /** Redact and persist a run. Returns the stored (redacted) snapshot. */
+  save(raw: SnapshotRaw, secretValues: Record<string, string>, revision?: number): SnapshotRedacted {
+    const r = new Redactor({ secretValues });
     const redacted: SnapshotRedacted = {
       id: raw.id,
       endpointId: raw.endpointId,
       timestamp: raw.timestamp,
+      revision,
       request: {
         method: raw.request.method,
-        url: redactor.redactString(raw.request.url),
-        headers: redactor.redactHeaders(raw.request.headers),
-        body: redactor.redactString(
-          raw.request.body ?? ""
-        ),
+        url: r.redactString(raw.request.url),
+        headers: r.redactHeaders(raw.request.headers),
+        body: raw.request.body === null ? null : r.redactString(raw.request.body),
       },
       status: raw.status,
-      headers: redactor.redactHeaders(raw.headers),
-      body: redactor.redactObject(raw.body),
+      headers: r.redactHeaders(raw.headers),
+      body: r.redactObject(raw.body),
       timeMs: raw.timeMs,
       size: raw.size,
       passed: raw.passed,
       failures: raw.failures,
     };
 
-    const safeTs = raw.timestamp.replace(/[:.]/g, "-");
-    const relDir = `snapshots/${raw.endpointId}`;
-    const relFile = `${relDir}/${safeTs}.${raw.id}.json`;
-
-    await this.cfg.ensureDir(relDir);
-    await this.cfg.writeFile(
-      relFile,
-      JSON.stringify(redacted, null, 2)
-    );
-
-    // Apply retention
-    await this._applyRetention(raw.endpointId, raw.id);
-
-    // Clear secret values from the raw snapshot (defence in depth)
-    delete raw._secretValues;
-
-    return {
-      id: raw.id,
-      endpointId: raw.endpointId,
-      timestamp: raw.timestamp,
-      status: raw.status,
-      size: raw.size,
-      passed: raw.passed,
-    };
+    const dir = this.dir(raw.endpointId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${raw.timestamp.replace(/[:.]/g, "-")}.${raw.id}.json`), JSON.stringify(redacted, null, 2) + "\n");
+    this.applyRetention(raw.endpointId);
+    return redacted;
   }
 
-  async load(id: string): Promise<SnapshotRedacted | undefined> {
-    // Scan all endpoint snapshot dirs to find the id
-    const endpointDirs = await this._listSnapshotDirs();
-    for (const dir of endpointDirs) {
-      const files = await this.cfg.listDir(`snapshots/${dir}`);
-      for (const f of files) {
-        if (f.endsWith(`.${id}.json`)) {
-          const content = await this.cfg.readFile(
-            `snapshots/${dir}/${f}`
-          );
-          if (content) {
-            return JSON.parse(content) as SnapshotRedacted;
-          }
-        }
-      }
-    }
-    return undefined;
-  }
-
-  async list(endpointId: string): Promise<SnapshotMeta[]> {
-    const files = await this.cfg.listDir(`snapshots/${endpointId}`);
-    const metas: SnapshotMeta[] = [];
-    for (const f of files) {
-      if (!f.endsWith(".json")) continue;
-      const content = await this.cfg.readFile(
-        `snapshots/${endpointId}/${f}`
-      );
-      if (!content) continue;
-      const snap = JSON.parse(content) as SnapshotRedacted;
-      metas.push({
-        id: snap.id,
-        endpointId: snap.endpointId,
-        timestamp: snap.timestamp,
-        status: snap.status,
-        size: snap.size,
-        passed: snap.passed,
+  /** Newest first. */
+  list(endpointId: string): SnapshotMeta[] {
+    const baseline = this.baselineId(endpointId);
+    return this.files(endpointId)
+      .map(({ file }) => {
+        const s = JSON.parse(readFileSync(file, "utf-8")) as SnapshotRedacted;
+        return {
+          id: s.id,
+          endpointId: s.endpointId,
+          timestamp: s.timestamp,
+          status: s.status,
+          size: s.size,
+          timeMs: s.timeMs,
+          passed: s.passed,
+          revision: s.revision,
+          baseline: s.id === baseline,
+        };
       });
-    }
-    return metas.sort(
-      (a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)
-    );
   }
 
-  async latest(endpointId: string): Promise<SnapshotRedacted | undefined> {
-    const list = await this.list(endpointId);
-    if (list.length === 0) return undefined;
-    return this.load(list[0]!.id);
+  load(endpointId: string, id: string): SnapshotRedacted | undefined {
+    const file = this.path(endpointId, id);
+    return file ? (JSON.parse(readFileSync(file, "utf-8")) as SnapshotRedacted) : undefined;
   }
 
-  async baseline(endpointId: string): Promise<SnapshotRedacted | undefined> {
-    const list = await this.list(endpointId);
-    // A baseline is marked by filename suffix `.baseline.json`
-    // For now, fall back to latest if no explicit baseline
-    const baselineFile = list.find(
-      (m) => m.id.endsWith(".baseline") || m.timestamp.endsWith("T00-00-00")
-    );
-    return baselineFile ? this.load(baselineFile.id) : this.latest(endpointId);
+  /** Absolute file path of a snapshot (used for the editor's native diff). */
+  path(endpointId: string, id: string): string | undefined {
+    return this.files(endpointId).find((f) => f.id === id)?.file;
   }
 
-  async delete(id: string): Promise<void> {
-    const endpointDirs = await this._listSnapshotDirs();
-    for (const dir of endpointDirs) {
-      const files = await this.cfg.listDir(`snapshots/${dir}`);
-      for (const f of files) {
-        if (f.endsWith(`.${id}.json`)) {
-          await this.cfg.deleteFile(`snapshots/${dir}/${f}`);
-          return;
-        }
-      }
-    }
+  latest(endpointId: string): SnapshotRedacted | undefined {
+    const first = this.files(endpointId)[0];
+    return first ? this.load(endpointId, first.id) : undefined;
   }
 
-  private async _listSnapshotDirs(): Promise<string[]> {
+  all(endpointId: string): SnapshotRedacted[] {
+    return this.files(endpointId).map(({ file }) => JSON.parse(readFileSync(file, "utf-8")) as SnapshotRedacted);
+  }
+
+  baselineId(endpointId: string): string | undefined {
     try {
-      return await this.cfg.listDir("snapshots");
+      const id = readFileSync(join(this.dir(endpointId), "baseline"), "utf-8").trim();
+      return this.path(endpointId, id) ? id : undefined;
     } catch {
-      return [];
+      return undefined;
     }
   }
 
-  private async _applyRetention(
-    endpointId: string,
-    currentId: string
-  ): Promise<void> {
-    const list = await this.list(endpointId);
-    // Keep baselines + current
-    const nonBaseline = list.filter(
-      (m) => m.id !== currentId && !m.id.endsWith(".baseline")
-    );
-    const toDelete = nonBaseline.slice(this.cfg.retention);
-    for (const meta of toDelete) {
-      await this.delete(meta.id);
-    }
+  baseline(endpointId: string): SnapshotRedacted | undefined {
+    const id = this.baselineId(endpointId);
+    return id ? this.load(endpointId, id) : undefined;
+  }
+
+  setBaseline(endpointId: string, id: string): void {
+    if (!this.path(endpointId, id)) throw new Error(`Snapshot "${id}" not found for ${endpointId}`);
+    writeFileSync(join(this.dir(endpointId), "baseline"), id + "\n");
+  }
+
+  delete(endpointId: string, id: string): void {
+    const file = this.path(endpointId, id);
+    if (file) unlinkSync(file);
+    if (this.baselineId(endpointId) === undefined) rmSync(join(this.dir(endpointId), "baseline"), { force: true });
+  }
+
+  private files(endpointId: string): { id: string; file: string }[] {
+    const dir = this.dir(endpointId);
+    if (!existsSync(dir)) return [];
+    // File names start with the ISO timestamp, so a reverse sort is newest first.
+    return readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .sort()
+      .reverse()
+      .map((f) => ({ id: f.slice(f.indexOf(".") + 1, -".json".length), file: join(dir, f) }));
+  }
+
+  private applyRetention(endpointId: string): void {
+    const baseline = this.baselineId(endpointId);
+    const extra = this.files(endpointId).filter((f) => f.id !== baseline).slice(this.retention);
+    for (const f of extra) unlinkSync(f.file);
   }
 }

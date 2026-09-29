@@ -157,7 +157,7 @@ export class Registry {
     // --- Collections ---
     const collRoot = ".apilot/collections";
     if (this.files.exists(`${collRoot}/`)) {
-      const topDirs = this.files.listDir(collRoot);
+      const topDirs = this.files.listDir(collRoot).sort();
       for (const dir of topDirs) {
         this._walkCollection(collRoot, dir, "", collections, endpoints);
       }
@@ -197,10 +197,21 @@ export class Registry {
     const entries = this.files.listDir(path);
 
     // Is this a collection? (has endpoint files or subfolders)
-    const endpointFiles = entries.filter(
-      (e) => e.endsWith(".yaml") && e !== "_folder.yaml"
-    );
-    const subFolders = entries.filter((e) => !e.includes("."));
+    // `_folder.yaml` may list `order: [slug, …]` so chained requests run in sequence.
+    let order: string[] = [];
+    try {
+      order = (parseYaml(this.files.read(`${path}/_folder.yaml`) ?? "") as { order?: string[] } | null)?.order ?? [];
+    } catch {
+      /* invalid folder file — ignore ordering */
+    }
+    const rank = (f: string) => {
+      const i = order.indexOf(f.replace(/\.(yaml|yml)$/, ""));
+      return i === -1 ? order.length : i;
+    };
+    const endpointFiles = entries
+      .filter((e) => e.endsWith(".yaml") && e !== "_folder.yaml")
+      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    const subFolders = entries.filter((e) => !e.includes(".")).sort();
 
     if (endpointFiles.length > 0 || subFolders.length > 0) {
       const collectionId = (relPrefix + name).replace(/^\//, "");
