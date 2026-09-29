@@ -2,14 +2,13 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 
-// Vite config for the Apilot webview UI.
-// Output is a single JS bundle consumed by the VS Code webview panel.
+// Single IIFE bundle + style.css, loaded by the extension's webview panel.
 export default defineConfig({
   plugins: [react()],
-  root: ".",
   base: "./",
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
   build: {
-    outDir: "dist",
+    outDir: path.resolve(__dirname, "../extension/dist/webview"),
     emptyOutDir: true,
     lib: {
       name: "ApilotWebview",
@@ -17,16 +16,6 @@ export default defineConfig({
       formats: ["iife"],
       fileName: () => "index.js",
     },
-    rollupOptions: {
-      external: [],
-      output: {
-        inlineDynamicImports: true,
-      },
-    },
-    sourcemap: true,
-  },
-  server: {
-    port: 3100,
-    hmr: true,
+    rollupOptions: { output: { inlineDynamicImports: true, assetFileNames: "style.css" } },
   },
 });
