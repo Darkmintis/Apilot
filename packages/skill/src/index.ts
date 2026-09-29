@@ -1,143 +1,108 @@
 /**
- * Apilot Skill — provides AI context about the Apilot workspace,
- * its file structure, MCP tools, and workflow rules.
+ * AI instructions for Apilot projects.
  *
- * This module reads the template SKILL.md and injects project-specific
- * context (collection list, endpoint list, environment names) so that
- * AI assistants using Claude/Cursor/VS Code receive accurate, up-to-date
- * information about the workspace they're operating on.
+ * One source, written into each assistant's project-level location so it is
+ * picked up automatically — no "connect" step:
+ *  - Cursor:      .cursor/skills/apilot/SKILL.md
+ *  - Claude Code: .claude/skills/apilot/SKILL.md
+ *  - Copilot:     .github/instructions/apilot.instructions.md
  */
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-import { Registry, NodeFileResolver } from "@apilot/core";
+export const SKILL_DESCRIPTION =
+  "Work with this project's HTTP APIs through Apilot: run real requests, read real responses, detect breaking changes, and generate typed models. Use whenever writing, fixing, or reviewing code that calls a backend API, or when the user mentions endpoints, API responses, models, or .apilot/.";
 
-const TEMPLATE_PATH = resolve(__dirname, "..", "template", "SKILL.md");
+export const SKILL_BODY = `# Apilot — real API data for this codebase
 
-/**
- * Read the SKILL.md template.
- * @returns The raw template content.
- */
-export function loadTemplate(): string {
-  try {
-    return readFileSync(TEMPLATE_PATH, "utf-8");
-  } catch {
-    return DEFAULT_TEMPLATE;
-  }
-}
+This project keeps its API requests, real responses, and version history in \`.apilot/\`.
+Apilot's MCP tools let you do everything the Apilot panel can. **Never guess a field name,
+type, or nullability — look at a real response.**
 
-/**
- * Build a project-aware SKILL.md by injecting the current project's
- * collections, endpoints, and environments into the template.
- *
- * @param projectRoot - Path to the directory containing `.apilot/`
- * @returns A rendered SKILL.md string.
- */
-export function renderSkill(projectRoot: string): string {
-  const apilotDir = resolve(projectRoot, ".apilot");
-  if (!existsSync(apilotDir)) {
-    return loadTemplate();
-  }
+## Before writing API code
+1. \`list_endpoints\` — find the endpoint id (e.g. \`orders.list\`).
+2. \`get_endpoint\` — definition + latest real response. If there is none, \`run_endpoint\`.
+3. \`get_schema\` — types, required vs optional, nullable, enums (learned from every saved response).
+4. \`generate_code\` (dart | typescript | kotlin | swift) — writes models + a typed call. Use them;
+   don't hand-write models for Apilot endpoints.
 
-  const files = new NodeFileResolver(projectRoot);
-  const registry = new Registry(files).build();
+## When the backend changes
+1. \`run_endpoint\` (or \`run_collection\`) — each run is compared to the endpoint's **baseline**.
+2. \`diff_endpoint\` — classified changes: **breaking** (field removed, type changed, can now be null,
+   likely rename, status changed), **warning** (new enum value), non-breaking (field added, no longer null).
+3. \`impact_report\` — exact files/lines that use the changed fields. Fix only those.
+4. \`generate_code\` again, then \`set_baseline\` once the new shape is accepted.
 
-  let template = loadTemplate();
+## Changing requests
+- \`add_endpoint\` / \`update_endpoint\` / \`delete_endpoint\`. Every edit becomes a revision:
+  \`list_revisions\`, \`diff_revisions\`, \`restore_revision\`. Pass \`label\` to describe the change.
+- \`import_spec\` accepts a cURL command, Postman collection, or OpenAPI document.
+- Chain values between requests with \`after: [{ set: { orderId: "$.data[0].id" } }]\`.
 
-  // Inject project name
-  template = template.replace(
-    /\{\{PROJECT_NAME\}\}/g,
-    registry.project.name ?? "apilot-project"
-  );
+## Secrets — hard rules
+- Secret values live in the OS keychain (editor) or \`APILOT_SECRET_<name>\` (CI). They are never in files,
+  snapshots, or tool results (masked as \`⟦REDACTED⟧\`).
+- Reference secrets as \`{{name}}\`. Never write a token, password, or key into any file.
+- You may declare a secret (\`set_variable\` with \`type: secret\`), but only the user enters its value.
+  If a run reports a missing secret, ask the user to enter it in the Apilot panel → Environments.
 
-  // Inject collection list
-  const collectionList = registry.collections
-    .map((c) => `  - \`${c.id}\` — ${c.name}`)
-    .join("\n") || "  (no collections — import some endpoints)";
-  template = template.replace(/\{\{COLLECTIONS\}\}/g, collectionList);
+## Generated code
+- Files with the \`GENERATED BY APILOT\` header are regenerated; don't edit them. Put custom code in
+  separate files — Apilot never overwrites files without the header.
+- Dart uses freezed + json_serializable: run \`dart run build_runner build\` after generating.
 
-  // Inject endpoint list
-  const endpointList = registry.endpoints
-    .map((e) => `  - \`${e.id}\` — ${e.method} ${e.url} (collection: \`${e.collectionId}\`)`)
-    .join("\n") || "  (no endpoints — add some in `.apilot/collections/`)";
-  template = template.replace(/\{\{ENDPOINTS\}\}/g, endpointList);
+## Without MCP (plain files)
+- \`.apilot/collections/<collection>/<name>.yaml\` — endpoint (id = \`<collection>.<name>\`)
+- \`.apilot/environments/<env>.yaml\` — variables (\`type: text\` values, \`type: secret\` names only)
+- \`.apilot/snapshots/<id>/*.json\` — real responses (redacted); \`baseline\` holds the accepted snapshot id
+- \`.apilot/history/<id>/<n>.yaml\` — request revisions
+- CLI: \`apilot run <id>\`, \`apilot diff <id>\`, \`apilot codegen <id> --lang dart\`, \`apilot check\`
 
-  // Inject environment list
-  const envList = registry.environments
-    .map((e) => `  - \`${e.name}\``).join("\n") || "  (no environments defined)";
-  template = template.replace(/\{\{ENVIRONMENTS\}\}/g, envList);
-
-  // Inject codegen targets
-  const codegenTargets = Object.keys(registry.project.codegen ?? {})
-    .map((k) => `  - \`${k}\``)
-    .join("\n") || "  (no codegen targets configured)";
-  template = template.replace(/\{\{CODEGEN_TARGETS\}\}/g, codegenTargets);
-
-  return template;
-}
-
-/**
- * Write the rendered SKILL.md into the project's `.apilot/` directory.
- * Called by the extension on activation and on file changes.
- */
-export function writeSkill(projectRoot: string): string {
-  const apilotDir = resolve(projectRoot, ".apilot");
-  const skillPath = resolve(apilotDir, "SKILL.md");
-  const content = renderSkill(projectRoot);
-  mkdirSync(apilotDir, { recursive: true });
-  writeFileSync(skillPath, content, "utf-8");
-  return skillPath;
-}
-
-const DEFAULT_TEMPLATE = `# Apilot — AI Assistant Skill
-
-> This file gives AI assistants context about your Apilot API workspace.
-
-## What is Apilot?
-Apilot is an API workspace that lives inside your editor (VS Code/Cursor).
-It lets you define, run, version, and diff API endpoints — and gives AI
-assistants access to the same capabilities via the Model Context Protocol (MCP).
-
-## File Structure
+Endpoint file example:
+\`\`\`yaml
+name: List orders
+method: GET
+url: "{{baseUrl}}/orders"
+auth: { type: bearer, token: "{{authToken}}" }
+query: { page: "1" }
+expect: { status: 200 }
+after:
+  - set: { orderId: "$.data[0].id" }
 \`\`\`
-.apilot/
-  apilot.yaml        # project config (name, default env, codegen targets)
-  environments/      # env-specific variables + secrets
-  collections/       # endpoint definitions (YAML, nested folders)
-  snapshots/         # saved request/response pairs for diffing
-  generated/         # codegen output (Dart, TS, Kotlin, Swift)
-  SKILL.md           # this file (AI context)
-\`\`\`
-
-## MCP Tools (12 available)
-- \`list_endpoints\` — discover collections + endpoints
-- \`get_endpoint\` — get full endpoint definition
-- \`run_endpoint\` — execute an endpoint, get redacted response
-- \`run_collection\` — run all endpoints in a collection
-- \`get_schema\` — infer JSON schema from response
-- \`diff_endpoint\` — compare two snapshots, classify changes
-- \`impact_report\` — assess severity of API response changes
-- \`generate_code\` — generate typed models + API clients
-- \`add_endpoint\` — create a new endpoint definition
-- \`update_endpoint\` — modify an endpoint
-- \`list_variables\` — list env variables (secrets masked)
-- \`import_spec\` — import from cURL, Postman, OpenAPI, HAR
-
-## How to Work
-1. Use \`list_endpoints\` to discover APIs.
-2. Use \`list_variables\` to see what's defined (secrets are always masked).
-3. Run endpoints with \`run_endpoint\` — secrets come from env vars (\`APilot_secret_<name>\`).
-4. Use \`diff_endpoint\` to detect breaking changes between runs.
-5. Use \`generate_code\` to produce typed models.
-
-## Critical Rules
-- Never output raw secret values. If a secret is needed, use the env-var mechanism.
-- Generated code is always marked "do not edit by hand."
-- Always check \`diff_endpoint\` before deploying API changes.
-- Use the project's own file structure (\`.apilot/\`) for all operations.
 `;
 
-export default { loadTemplate, renderSkill, writeSkill };
+export const MARKER = "<!-- managed by Apilot: edits are overwritten; delete this line to keep your own version -->";
+
+export interface AiFile {
+  path: string;
+  content: string;
+}
+
+export function aiFiles(): AiFile[] {
+  const skill = `---\nname: apilot\ndescription: ${SKILL_DESCRIPTION}\n---\n${MARKER}\n\n${SKILL_BODY}`;
+  return [
+    { path: ".cursor/skills/apilot/SKILL.md", content: skill },
+    { path: ".claude/skills/apilot/SKILL.md", content: skill },
+    { path: ".github/instructions/apilot.instructions.md", content: `---\napplyTo: "**"\n---\n${MARKER}\n\n${SKILL_BODY}` },
+  ];
+}
+
+/**
+ * Write the AI instruction files. Files the user took over (marker line
+ * removed) are left alone. Returns the paths that were created or updated.
+ */
+export function writeAiFiles(root: string): string[] {
+  const changed: string[] = [];
+  for (const f of aiFiles()) {
+    const full = join(root, f.path);
+    if (existsSync(full)) {
+      const current = readFileSync(full, "utf-8");
+      if (current === f.content || !current.includes(MARKER)) continue;
+    }
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, f.content);
+    changed.push(f.path);
+  }
+  return changed;
+}
