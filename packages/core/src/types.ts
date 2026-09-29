@@ -99,7 +99,8 @@ export interface EndpointFile {
   auth?: EndpointAuth;
   query?: Record<string, string>;
   headers?: Record<string, string>;
-  body?: string | null;
+  /** raw string, or an object/array sent as JSON */
+  body?: string | Record<string, unknown> | unknown[] | null;
   expect?: {
     status?: number;
     schema?: string; // path to schema file
@@ -179,14 +180,14 @@ export interface SnapshotRaw {
   size: number;
   passed: boolean;
   failures: AssertionFailure[];
-  /** original secret values that were redacted (kept ONLY in memory, never persisted) */
-  _secretValues?: Record<string, string>;
 }
 
 export interface SnapshotRedacted {
   id: string;
   endpointId: string;
   timestamp: string;
+  /** endpoint definition revision that produced this response */
+  revision?: number;
   request: ResolvedRequest;
   status: number;
   headers: Record<string, string>;
@@ -203,7 +204,31 @@ export interface SnapshotMeta {
   timestamp: string;
   status: number;
   size: number;
+  timeMs: number;
   passed: boolean;
+  revision?: number;
+  baseline: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Endpoint revisions (lightweight version history of the request definition)
+// ---------------------------------------------------------------------------
+
+export interface Revision {
+  revision: number;
+  timestamp: string;
+  /** optional human label, e.g. "added pagination" */
+  label?: string;
+  /** auto-generated summary of what changed vs the previous revision */
+  summary: string;
+  definition: EndpointFile;
+}
+
+export interface RevisionChange {
+  field: string;
+  change: "added" | "removed" | "changed";
+  from?: unknown;
+  to?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +281,8 @@ export interface ApilotSchema {
   items?: ApilotSchema;
   required: string[];
   enum?: unknown[];
+  /** strings only: every sample was an ISO-8601 date or date-time */
+  format?: "date" | "date-time";
   nullable: boolean;
   description?: string;
 }
