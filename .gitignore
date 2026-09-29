@@ -7,3 +7,6 @@ dist/
 .poolside/
 .vscode-test/
 .local/
+.dart-check/
+*.vsix
+.pnpm-store/
