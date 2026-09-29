@@ -33,7 +33,7 @@ describe("Differ", () => {
     expect(result.breaking).toBe(true);
     const removed = result.changes.find((c) => c.kind === "fieldRemoved");
     expect(removed).toBeDefined();
-    expect(removed!.path).toBe("$.users[0].name");
+    expect(removed!.path).toBe("$.users[].name");
     expect(result.summary.breaking).toBeGreaterThan(0);
   });
 
@@ -70,16 +70,52 @@ describe("Differ", () => {
     expect(statusChanged!.toValue).toBe(500);
   });
 
-  it("detects nullable → non-nullable as breaking", () => {
+  it("non-null → nullable is breaking (master plan §7.4)", () => {
+    const from = makeSnapshot("users.list", { name: "Bob" });
+    const to = makeSnapshot("users.list", { name: null });
+    const result = differ.diff({ endpointId: "users.list", from, to });
+
+    const change = result.changes.find((c) => c.kind === "nonNullableToNullable");
+    expect(change?.level).toBe("breaking");
+    expect(result.breaking).toBe(true);
+  });
+
+  it("nullable → non-null is not breaking", () => {
     const from = makeSnapshot("users.list", { name: null });
     const to = makeSnapshot("users.list", { name: "Bob" });
     const result = differ.diff({ endpointId: "users.list", from, to });
 
-    const nullableChange = result.changes.find(
-      (c) => c.kind === "nullableToNonNullable"
-    );
-    expect(nullableChange).toBeDefined();
-    expect(nullableChange!.level).toBe("breaking");
+    expect(result.breaking).toBe(false);
+  });
+
+  it("checks every array item, not just the first", () => {
+    const from = makeSnapshot("users.list", [{ id: 1, email: "a@x.io" }, { id: 2, email: "b@x.io" }]);
+    const to = makeSnapshot("users.list", [{ id: 1, email: "a@x.io" }, { id: 2, email: null }]);
+    const result = differ.diff({ endpointId: "users.list", from, to });
+
+    expect(result.changes.find((c) => c.path === "$[].email")?.kind).toBe("nonNullableToNullable");
+  });
+
+  it("flags likely renames and new enum values", () => {
+    const orders = (statuses: string[], key = "total") =>
+      statuses.map((status, i) => ({ id: i, status, [key]: 10 }));
+    const from = makeSnapshot("orders.list", orders(["paid", "paid", "open", "open"]));
+    const to = makeSnapshot("orders.list", orders(["paid", "paid", "refunded", "refunded"], "amount"));
+    const result = differ.diff({ endpointId: "orders.list", from, to });
+
+    expect(result.changes.find((c) => c.kind === "renamed")?.description).toContain('"total" was likely renamed to "amount"');
+    expect(result.changes.find((c) => c.kind === "enumValueAdded")?.level).toBe("warning");
+  });
+
+  it("warnings alone are not breaking", () => {
+    const rows = (s: string[]) => s.map((status) => ({ status }));
+    const result = differ.diff({
+      endpointId: "x",
+      from: makeSnapshot("x", rows(["a", "a", "b", "b"])),
+      to: makeSnapshot("x", rows(["a", "a", "b", "b", "c", "c"])),
+    });
+    expect(result.summary.warning).toBe(1);
+    expect(result.breaking).toBe(false);
   });
 
   it("returns no changes when snapshots are identical", () => {
