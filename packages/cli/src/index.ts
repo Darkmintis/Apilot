@@ -1,336 +1,180 @@
 #!/usr/bin/env node
 /**
- * Apilot CLI — run endpoints, diff snapshots, and generate code from
- * the command line. Designed for CI pipelines and scriptable workflows.
- *
- * Usage:
- *   apilot run <endpoint-id> --env dev
- *   apilot run-all --env dev
- *   apilot diff <endpoint-id>
- *   apilot codegen <endpoint-id> --lang dart --out lib/api
- *   apilot check                       # CI: run all + diff (non-zero exit on failure)
+ * Apilot CLI — for CI and scripts. Same Workspace as the editor panel and
+ * the MCP server; secrets come from APILOT_SECRET_<name> environment variables.
  */
 
 import { Command } from "commander";
-import * as path from "node:path";
-import * as fs from "node:fs";
-import {
-  Registry,
-  NodeFileResolver,
-  resolveContext,
-  RequestRunner,
-  JsonSnapshotStore,
-  Differ,
-  inferSchema,
-  parseEndpointFile,
-  parseEnvironmentFile,
-  Redactor,
-} from "@apilot/core";
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { Workspace, importSpec, type DiffResult, type ImportSource } from "@apilot/core";
+import { LANGUAGES, generate, writeGenerated } from "@apilot/codegen";
+import { writeAiFiles } from "@apilot/skill";
 
+function findRoot(): string {
+  for (let dir = process.cwd(); ; dir = dirname(dir)) {
+    if (existsSync(join(dir, ".apilot", "apilot.yaml"))) return dir;
+    if (dirname(dir) === dir) return process.cwd();
+  }
+}
+
+const ws = new Workspace(findRoot());
 const program = new Command();
-const SECRET_PREFIX = "apilot_secret_";
+
+program.name("apilot").description("Run, diff, version, and generate code from your API endpoints.").version("0.1.0");
+
+const icon = (level: string) => (level === "breaking" ? "✗" : level === "warning" ? "⚠" : level === "nonBreaking" ? "+" : "·");
+
+function printDiff(diff: DiffResult): void {
+  const { breaking, warning, nonBreaking, info } = diff.summary;
+  console.log(`  ${breaking} breaking, ${warning} warning, ${nonBreaking} non-breaking, ${info} info`);
+  for (const c of diff.changes) console.log(`  ${icon(c.level)} ${c.path} — ${c.description}`);
+}
+
+function action<A extends unknown[]>(fn: (...args: A) => Promise<void> | void, needsProject = true) {
+  return async (...args: A) => {
+    try {
+      if (needsProject && !ws.exists()) throw new Error("No .apilot/ project found. Run `apilot init` first.");
+      await fn(...args);
+    } catch (err) {
+      console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  };
+}
 
 program
-  .name("apilot")
-  .description("API workspace CLI — run, diff, and generate code from endpoints.")
-  .version("0.1.0");
+  .command("init")
+  .description("Create a starter .apilot/ folder")
+  .option("-n, --name <name>", "project name")
+  .action(action((opts: { name?: string }) => {
+    ws.init(opts.name);
+    console.log(`✓ Apilot project ready at ${ws.apilotDir}`);
+  }, false));
 
-function findProjectRoot(start?: string): string {
-  let dir = start ?? process.cwd();
-  while (dir !== "/" && !fs.existsSync(path.join(dir, ".apilot", "apilot.yaml"))) {
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return dir;
-}
+program
+  .command("setup-ai")
+  .description("Add Apilot skills for Cursor, Claude Code, and Copilot to this project (the editor extension does this automatically)")
+  .action(action(() => {
+    const written = writeAiFiles(ws.root);
+    console.log(written.length ? written.map((f) => `✓ ${f}`).join("\n") : "✓ AI skill files already up to date");
+    console.log(`\nMCP server (for clients without the extension):\n  command: npx\n  args: ["-y", "@apilot/mcp"]\n  env: { "APILOT_PROJECT_ROOT": "${ws.root}" }`);
+  }));
 
-function makeSnapshotStore(projectRoot: string): JsonSnapshotStore {
-  return new JsonSnapshotStore({
-    root: path.join(projectRoot, ".apilot"),
-    retention: 20,
-    writeFile: async (rel: string, content: string) => {
-      const full = path.join(projectRoot, ".apilot", rel);
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      fs.writeFileSync(full, content, "utf-8");
-    },
-    readFile: async (rel: string) => {
-      try { return fs.readFileSync(path.join(projectRoot, ".apilot", rel), "utf-8"); } catch { return undefined; }
-    },
-    listDir: async (rel: string) => {
-      try { return fs.readdirSync(path.join(projectRoot, ".apilot", rel)); } catch { return []; }
-    },
-    deleteFile: async (rel: string) => {
-      try { fs.unlinkSync(path.join(projectRoot, ".apilot", rel)); } catch {}
-    },
-    ensureDir: async (rel: string) => {
-      fs.mkdirSync(path.join(projectRoot, ".apilot", rel), { recursive: true });
-    },
-  });
-}
-
-async function loadRunContext(projectRoot: string, envName: string) {
-  const files = new NodeFileResolver(projectRoot);
-  const registry = new Registry(files).build();
-
-  const envEntry = registry.environments.find((e) => e.name === envName);
-  if (!envEntry) {
-    throw new Error(
-      `Environment "${envName}" not found. Available: ${registry.environments.map((e) => e.name).join(", ")}`
-    );
-  }
-
-  const envRaw = files.read(`.apilot/environments/${envName}.yaml`) ?? "";
-  const env = parseEnvironmentFile(envRaw, envEntry.path);
-
-  const variables: Record<string, string> = {};
-  const secretValues: Record<string, string> = {};
-
-  for (const [name, def] of Object.entries(env.variables ?? {})) {
-    const d = def as any;
-    if (d?.type === "secret") {
-      const val = process.env[`${SECRET_PREFIX}${name}`] ?? process.env[`${name}`];
-      if (val) secretValues[name] = val;
-      else console.warn(`⚠  Missing secret: ${name} (set ${SECRET_PREFIX}${name} or ${name})`);
-    } else if (d?.value !== undefined) {
-      variables[name] = String(d.value);
-    }
-  }
-
-  const ctx = await resolveContext(env, {
-    resolve: async (secretName: string) => secretValues[secretName] ?? "",
-  });
-  (ctx as any)._secretValues = secretValues;
-
-  return { files, registry, env, ctx, secretValues };
-}
-
-// --- run <endpointId> ---
+program
+  .command("list")
+  .description("List endpoints")
+  .action(action(() => {
+    for (const e of ws.registry().endpoints) console.log(`${e.method.padEnd(7)} ${e.id.padEnd(32)} ${e.url}`);
+  }));
 
 program
   .command("run <endpointId>")
-  .description("Run a single endpoint")
-  .option("-e, --env <name>", "Environment name", "dev")
-  .option("--dry-run", "Resolve and print the request without executing it")
-  .action(async (endpointId: string, opts: { env: string; dryRun: boolean }) => {
-    const projectRoot = findProjectRoot();
-    const { registry, ctx, secretValues } = await loadRunContext(projectRoot, opts.env);
-
-    const ep = registry.endpoints.find((e) => e.id === endpointId);
-    if (!ep) {
-      console.error(`Endpoint "${endpointId}" not found.`);
-      process.exit(1);
+  .description("Run one endpoint and save the (redacted) response")
+  .option("-e, --env <name>", "environment")
+  .action(action(async (id: string, opts: { env?: string }) => {
+    const r = await ws.run(id, opts.env);
+    const s = r.snapshot;
+    console.log(`${s.passed ? "✓" : "✗"} ${s.request.method} ${s.request.url} → ${s.status} (${s.timeMs} ms)`);
+    for (const f of s.failures) console.log(`  ✗ ${f.message}`);
+    console.log(typeof s.body === "string" ? s.body : JSON.stringify(s.body, null, 2));
+    if (r.diff?.changes.length) {
+      console.log(`\nChanges vs baseline:`);
+      printDiff(r.diff);
     }
-
-    const files = new NodeFileResolver(projectRoot);
-    const epRaw = files.read(ep.file) ?? "";
-    const endpoint = parseEndpointFile(epRaw, ep.file);
-
-    const runner = new RequestRunner();
-    const request = runner.resolve(endpoint, ctx);
-
-    if (opts.dryRun) {
-      console.log("Method:", request.method);
-      console.log("URL:", request.url);
-      console.log("Headers:", JSON.stringify(request.headers, null, 2));
-      if (request.body) console.log("Body:", request.body);
-      return;
-    }
-
-    const snapshot = await runner.run(request, ctx, endpointId);
-    const redactor = new Redactor({ secretValues });
-
-    console.log(`\n${ep.name} — ${request.method} ${request.url}`);
-    console.log("Status:", snapshot.status, snapshot.passed ? "✓" : "✗");
-    console.log("Duration:", snapshot.timeMs, "ms");
-    console.log("Response:", JSON.stringify(redactor.redactObject(snapshot.body), null, 2));
-
-    const store = makeSnapshotStore(projectRoot);
-    await store.save(snapshot, { secretValues });
-  });
-
-// --- run-all ---
+    if (!s.passed || r.diff?.breaking) process.exitCode = 1;
+  }));
 
 program
-  .command("run-all")
-  .description("Run all endpoints")
-  .option("-e, --env <name>", "Environment name", "dev")
-  .action(async (opts: { env: string }) => {
-    const projectRoot = findProjectRoot();
-    const { registry, ctx, secretValues } = await loadRunContext(projectRoot, opts.env);
-
-    const runner = new RequestRunner();
-    let passed = 0;
-    let failed = 0;
-    const store = makeSnapshotStore(projectRoot);
-
-    for (const ep of registry.endpoints) {
-      try {
-        const files = new NodeFileResolver(projectRoot);
-        const epRaw = files.read(ep.file);
-        if (!epRaw) throw new Error(`Cannot read: ${ep.file}`);
-        const endpoint = parseEndpointFile(epRaw, ep.file);
-        const request = runner.resolve(endpoint, ctx);
-        const snapshot = await runner.run(request, ctx, ep.id);
-
-        const ok = snapshot.status >= 200 && snapshot.status < 400;
-        console.log(`  ${ok ? "✓" : "✗"} ${ep.id} — ${snapshot.status}`);
-        if (ok) passed++;
-        else failed++;
-
-        await store.save(snapshot, { secretValues });
-      } catch (err) {
-        failed++;
-        console.log(`  ✗ ${ep.id} — ERROR: ${err instanceof Error ? err.message : String(err)}`);
-      }
+  .command("run-all [collectionId]")
+  .description("Run every endpoint (or one collection) in order")
+  .option("-e, --env <name>", "environment")
+  .action(action(async (collectionId: string | undefined, opts: { env?: string }) => {
+    const r = await ws.runAll(collectionId, opts.env);
+    for (const x of r.results) {
+      const mark = x.error || !x.passed ? "✗" : x.breaking ? "⚠" : "✓";
+      console.log(`  ${mark} ${x.endpointId.padEnd(32)} ${x.error ?? `${x.status} (${x.timeMs} ms)${x.breaking ? " — breaking changes" : ""}`}`);
     }
-
-    console.log(`\n${passed} passed, ${failed} failed out of ${registry.endpoints.length}`);
-    if (failed > 0) process.exit(1);
-  });
-
-// --- diff <endpointId> ---
+    console.log(`\n${r.passed} passed, ${r.failed} failed, ${r.breaking} with breaking changes (env: ${r.env})`);
+    if (r.failed || r.breaking) process.exitCode = 1;
+  }));
 
 program
   .command("diff <endpointId>")
-  .description("Diff the two most recent snapshots for an endpoint")
-  .action(async (endpointId: string) => {
-    const projectRoot = findProjectRoot();
-    const store = makeSnapshotStore(projectRoot);
-
-    const snaps = await store.list(endpointId);
-    if (snaps.length < 2) {
-      console.error("Need at least 2 snapshots to diff. Run the endpoint twice.");
-      process.exit(1);
+  .description("Compare responses (default: baseline → latest)")
+  .option("--from <snapshotId>")
+  .option("--to <snapshotId>")
+  .action(action((id: string, opts: { from?: string; to?: string }) => {
+    const diff = ws.diff(id, opts.from, opts.to);
+    console.log(`Diff ${id}: ${diff.fromId} → ${diff.toId}`);
+    printDiff(diff);
+    const { matches } = ws.impact(id, diff);
+    if (matches.length) {
+      console.log(`\nCode using changed fields:`);
+      for (const m of matches) console.log(`  ${m.file}:${m.line}  [${m.field}]  ${m.text}`);
     }
+    if (diff.breaking) process.exitCode = 2;
+  }));
 
-    const from = await store.load(snaps[snaps.length - 1]!.id);
-    const to = await store.load(snaps[0]!.id);
-    if (!from || !to) {
-      console.error("Failed to load snapshots.");
-      process.exit(1);
-    }
+program
+  .command("baseline <endpointId> [snapshotId]")
+  .description("Accept a response (default: latest) as the baseline")
+  .action(action((id: string, snapshotId?: string) => {
+    console.log(`✓ Baseline for ${id} is now ${ws.setBaseline(id, snapshotId)}`);
+  }));
 
-    const differ = new Differ();
-    const diff = differ.diff({ endpointId, from, to });
-
-    console.log(`\nDiff: ${endpointId}`);
-    console.log(`  ${diff.summary.breaking} breaking, ${diff.summary.warning} warnings, ${diff.summary.nonBreaking} non-breaking`);
-    for (const change of diff.changes) {
-      const icon = change.level === "breaking" ? "✗" : change.level === "warning" ? "⚠" : "✓";
-      console.log(`  ${icon} ${change.path} — ${change.description}`);
-    }
-    if (diff.summary.breaking > 0) process.exit(2);
-  });
-
-// --- codegen <endpointId> ---
+program
+  .command("history <endpointId>")
+  .description("Show the version history of an endpoint's request")
+  .action(action((id: string) => {
+    for (const r of ws.revisions(id)) console.log(`  v${r.revision}  ${r.timestamp.slice(0, 19).replace("T", " ")}  ${r.label ? `[${r.label}] ` : ""}${r.summary}`);
+  }));
 
 program
   .command("codegen <endpointId>")
-  .description("Generate code for an endpoint")
-  .option("-l, --lang <language>", "Target language: dart|typescript|kotlin|swift", "dart")
-  .option("-o, --out <dir>", "Output directory")
-  .action(async (endpointId: string, opts: { lang: string; out?: string }) => {
-    const projectRoot = findProjectRoot();
-    const files = new NodeFileResolver(projectRoot);
-    const registry = new Registry(files).build();
+  .description(`Generate models + API call (${LANGUAGES.join(" | ")})`)
+  .option("-l, --lang <language>", "target language", "dart")
+  .option("-o, --out <dir>", "output directory (default: apilot.yaml codegen setting)")
+  .option("--flavor <flavor>", "dart: freezed | plain")
+  .action(action((id: string, opts: { lang: string; out?: string; flavor?: string }) => {
+    const r = writeGenerated(ws.root, generate(ws, id, opts.lang, { outDir: opts.out, flavor: opts.flavor }));
+    for (const f of r.written) console.log(`✓ wrote ${f}`);
+    for (const f of r.unchanged) console.log(`· unchanged ${f}`);
+    for (const f of r.skipped) console.log(`⚠ skipped ${f} (hand-written file — no Apilot header)`);
+  }));
 
-    const ep = registry.endpoints.find((e) => e.id === endpointId);
-    if (!ep) {
-      console.error(`Endpoint "${endpointId}" not found.`);
-      process.exit(1);
-    }
-
-    const store = makeSnapshotStore(projectRoot);
-    const snap = await store.latest(endpointId);
-    if (!snap) {
-      console.error("No snapshot available. Run the endpoint first.");
-      process.exit(1);
-    }
-
-    const schema = inferSchema(snap.body);
-    const outDir = opts.out ?? path.join(projectRoot, ".apilot", "generated", ep.id.replace(/\./g, "/"));
-    console.log(`Generating ${opts.lang} code for ${endpointId} → ${outDir}`);
-
-    const fileName = ep.id.replace(/\./g, "_");
-    const modelName = fileName.replace(/_([a-z])/g, (_, c) => c.toUpperCase()).replace(/^([a-z])/, (_, c) => c.toUpperCase());
-
-    // Include schema info in generated comments
-    const schemaComment = `// Inferred schema: ${JSON.stringify(schema, null, 2)}`;
-
-    if (opts.lang === "dart") {
-      const code = `// Generated by Apilot. Do not edit by hand.\n// Endpoint: ${ep.name} (${ep.method} ${ep.url})\n${schemaComment}\n\nclass ${modelName} {\n  // TODO: Add fields based on inferred schema\n}\n`;
-      const fullPath = path.join(outDir, `${fileName}.dart`);
-      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-      fs.writeFileSync(fullPath, code, "utf-8");
-      console.log(`Wrote ${fullPath}`);
-    } else if (opts.lang === "typescript") {
-      const code = `// Generated by Apilot. Do not edit by hand.\n// Endpoint: ${ep.name}\n${schemaComment}\n\nexport interface ${modelName} {\n  // TODO: Add fields based on inferred schema\n}\n`;
-      const fullPath = path.join(outDir, `${fileName}.ts`);
-      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-      fs.writeFileSync(fullPath, code, "utf-8");
-      console.log(`Wrote ${fullPath}`);
-    } else {
-      console.error(`Unsupported language: ${opts.lang}. Use --lang dart|typescript|kotlin|swift`);
-      process.exit(1);
-    }
-  });
-
-// --- check (CI mode) ---
+program
+  .command("import <source> <file>")
+  .description("Import endpoints: source = curl | postman | openapi")
+  .option("-c, --collection <name>", "target collection")
+  .option("-e, --env <name>", "environment for imported variables")
+  .action(action(async (source: string, file: string, opts: { collection?: string; env?: string }) => {
+    if (!["curl", "postman", "openapi"].includes(source)) throw new Error("source must be curl, postman, or openapi");
+    const content = file === "-" ? readFileSync(0, "utf-8") : readFileSync(file, "utf-8");
+    const r = await importSpec(ws, source as ImportSource, content, opts.collection, opts.env);
+    for (const id of r.created) console.log(`✓ ${id}`);
+    for (const n of r.notes) console.log(`⚠ ${n}`);
+  }));
 
 program
   .command("check")
-  .description("CI mode: run all endpoints and check for breaking diffs")
-  .option("-e, --env <name>", "Environment name", "dev")
-  .action(async (opts: { env: string }) => {
-    const projectRoot = findProjectRoot();
-    const { registry, ctx, secretValues } = await loadRunContext(projectRoot, opts.env);
-
-    const runner = new RequestRunner();
-    let allPassed = true;
-    const store = makeSnapshotStore(projectRoot);
-
-    console.log("Running all endpoints...");
-    for (const ep of registry.endpoints) {
-      try {
-        const files = new NodeFileResolver(projectRoot);
-        const epRaw = files.read(ep.file);
-        if (!epRaw) throw new Error(`Cannot read: ${ep.file}`);
-        const endpoint = parseEndpointFile(epRaw, ep.file);
-        const request = runner.resolve(endpoint, ctx);
-        const snapshot = await runner.run(request, ctx, ep.id);
-
-        const ok = snapshot.status >= 200 && snapshot.status < 400;
-        console.log(`  ${ok ? "✓" : "✗"} ${ep.id} — ${snapshot.status}`);
-        if (!ok) allPassed = false;
-
-        await store.save(snapshot, { secretValues });
-
-        // Diff if we have previous snapshots
-        const snaps = await store.list(ep.id);
-        if (snaps.length >= 2) {
-          const from = await store.load(snaps[snaps.length - 1]!.id);
-          const to = await store.load(snaps[0]!.id);
-          if (from && to) {
-            const differ = new Differ();
-            const diff = differ.diff({ endpointId: ep.id, from, to });
-            if (diff.summary.breaking > 0) {
-              console.log(`    ⚠ ${diff.summary.breaking} breaking changes!`);
-              allPassed = false;
-            }
-          }
-        }
-      } catch (err) {
-        allPassed = false;
-        console.log(`  ✗ ${ep.id} — ERROR: ${err instanceof Error ? err.message : String(err)}`);
-      }
+  .description("CI: run everything; fail on errors or breaking changes vs baseline")
+  .option("-e, --env <name>", "environment")
+  .option("--markdown <file>", "also write a Markdown summary (e.g. $GITHUB_STEP_SUMMARY)")
+  .action(action(async (opts: { env?: string; markdown?: string }) => {
+    const r = await ws.runAll(undefined, opts.env);
+    const rows: string[] = [];
+    for (const x of r.results) {
+      const mark = x.error || !x.passed ? "✗" : x.breaking ? "⚠" : "✓";
+      console.log(`  ${mark} ${x.endpointId} ${x.error ?? x.status}`);
+      rows.push(`| ${mark} | \`${x.endpointId}\` | ${x.error ? `error: ${x.error.replace(/\|/g, "\\|")}` : x.status} | ${x.summary ? `${x.summary.breaking} breaking, ${x.summary.warning} warning` : "—"} |`);
+      if (x.breaking) printDiff(ws.diff(x.endpointId));
     }
+    const ok = r.failed === 0 && r.breaking === 0;
+    const md = `## Apilot check — ${ok ? "✅ passed" : "❌ failed"}\n\n${r.passed} passed · ${r.failed} failed · ${r.breaking} breaking (env \`${r.env}\`)\n\n| | Endpoint | Status | Changes vs baseline |\n|---|---|---|---|\n${rows.join("\n")}\n`;
+    if (opts.markdown) (existsSync(opts.markdown) ? appendFileSync : writeFileSync)(opts.markdown, md);
+    console.log(ok ? "\n✅ All checks passed." : "\n❌ Checks failed — errors or breaking changes detected.");
+    if (!ok) process.exitCode = 1;
+  }));
 
-    if (!allPassed) {
-      console.error("\n❌ Checks failed — breaking changes or errors detected.");
-      process.exit(1);
-    }
-    console.log("\n✅ All checks passed.");
-  });
-
-program.parse();
+program.parseAsync();
