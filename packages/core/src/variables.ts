@@ -6,39 +6,6 @@
  * secret *values* in plain text beyond the live run, and never writes them.
  */
 
-import type { EnvironmentFile, RunContext } from "./types.js";
-
-export interface SecretResolver {
-  /** Given a secret variable name, return its value. Called at run time only. */
-  resolve(name: string): Promise<string>;
-}
-
-/**
- * Resolve all variables for an environment + secret resolver.
- * Returns a context with both resolved values and the set of secret names
- * (so the redactor knows what to mask).
- */
-export async function resolveContext(
-  env: EnvironmentFile,
-  secretResolver: SecretResolver
-): Promise<RunContext> {
-  const variables: Record<string, string> = {};
-  const secretNames: string[] = [];
-
-  for (const [name, def] of Object.entries(env.variables)) {
-    if (def.type === "text") {
-      variables[name] = interpolate(def.value, variables);
-    } else {
-      // secret — resolve via the keychain-backed callback
-      const value = await secretResolver.resolve(name);
-      variables[name] = value;
-      secretNames.push(name);
-    }
-  }
-
-  return { variables, secretNames };
-}
-
 /** Synchronous variable interpolation. */
 export function interpolate(
   template: string,
