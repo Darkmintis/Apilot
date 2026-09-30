@@ -36,7 +36,21 @@ export function onHostMessage(fn: (msg: any) => void): () => void {
 
 export const persisted = { get: () => vscode.getState() ?? {}, set: (s: unknown) => vscode.setState(s) };
 
+/** Native modal (webviews can't use window.confirm). */
+export const confirm = (message: string, action: string, detail?: string): Promise<boolean> => call<boolean>("confirm", { message, action, detail });
+
+/** Set by the endpoint editor so navigation can warn before dropping unsaved edits. */
+export const unsaved = { current: false };
+
 export type Health = { status?: number; state: "none" | "passed" | "failed" | "breaking" | "changed" };
+
+export const HEALTH_LABEL: Record<Health["state"], string> = {
+  none: "Never run",
+  passed: "Matches baseline",
+  failed: "Last run failed",
+  breaking: "Breaking change",
+  changed: "Changed (safe)",
+};
 
 export interface AppState {
   hasProject: boolean;

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { KeyRound, Trash2 } from "lucide-react";
-import { call, type AppState } from "../api";
+import { KeyRound, Play, Trash2, Upload } from "lucide-react";
+import { call, confirm, type AppState } from "../api";
 import type { View } from "../App";
-import { Empty } from "./ResultTabs";
+import { Empty, Spinner } from "./ResultTabs";
 
 interface Variable {
   name: string;
@@ -175,7 +175,12 @@ function VariableRow({ env, v, act }: { env: string; v: Variable; act: (p: Promi
         )}
       </td>
       <td>
-        <button className="icon danger" aria-label={`Delete ${v.name}`} title="Delete variable" onClick={() => act(call("tool:delete_variable", { env, name: v.name }))}>
+        <button
+          className="icon danger"
+          aria-label={`Delete ${v.name}`}
+          title="Delete variable"
+          onClick={async () => (await confirm(`Delete “${v.name}” from ${env}?`, "Delete", v.type === "secret" ? "Its keychain value is removed too." : undefined)) && act(call("tool:delete_variable", { env, name: v.name }))}
+        >
           <Trash2 size={14} />
         </button>
       </td>
@@ -224,8 +229,8 @@ export function ImportPage({ env, setView }: { env: string; setView: (v: View) =
             </button>
           ))}
         </div>
-        <label className="button">
-          Choose file…
+        <label className="button" tabIndex={0} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.currentTarget.querySelector("input") as HTMLInputElement).click()}>
+          <Upload size={14} /> Choose file…
           <input type="file" accept=".json,.yaml,.yml,.txt,.sh" hidden onChange={(e) => onFile(e.target.files?.[0])} />
         </label>
         <input value={collection} onChange={(e) => setCollection(e.target.value)} placeholder="collection (optional)" aria-label="Target collection" />
@@ -299,22 +304,25 @@ export function RunAllPage({ env, state, autorun, setView }: { env: string; stat
   return (
     <div className="page">
       <h1>Run all</h1>
-      <div className="row gap">
+      <div className="row gap wrap">
         <select value={collection} onChange={(e) => setCollection(e.target.value)} aria-label="Collection">
           <option value="">All collections</option>
           {state.collections!.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <span className="muted">in “{env}”</span>
-        <button className="primary" disabled={busy} onClick={run}>{busy ? "Running…" : "Run"}</button>
+        <span className="muted">in <span className="chip">{env}</span></span>
+        <button className="primary" disabled={busy} onClick={run}>
+          {busy ? <span className="spinner" aria-hidden /> : <Play size={14} />} {busy ? "Running…" : "Run"}
+        </button>
       </div>
       {error && <div className="banner error">{error}</div>}
+      {busy && !result && <Spinner label="Running endpoints…" />}
       {!result && !busy && <Empty>Runs endpoints in order, passing chained values along, and compares each response to its baseline.</Empty>}
       {result && (
         <>
           <div className="stats">
-            <div className="stat ok"><div className="n">{result.passed}</div><div className="label">passed</div></div>
-            <div className="stat bad"><div className="n">{result.failed}</div><div className="label">failed</div></div>
-            <div className="stat bad"><div className="n">{result.breaking}</div><div className="label">breaking</div></div>
+            <div className={`stat passed ${result.passed ? "" : "zero"}`}><div className="n">{result.passed}</div><div className="label">Passed</div></div>
+            <div className={`stat failed ${result.failed ? "" : "zero"}`}><div className="n">{result.failed}</div><div className="label">Failed</div></div>
+            <div className={`stat breaking ${result.breaking ? "" : "zero"}`}><div className="n">{result.breaking}</div><div className="label">Breaking</div></div>
           </div>
           <table className="history">
             <thead>
@@ -322,7 +330,13 @@ export function RunAllPage({ env, state, autorun, setView }: { env: string; stat
             </thead>
             <tbody>
               {result.results.map((r) => (
-                <tr key={r.endpointId} className="clickable" onClick={() => setView({ kind: "endpoint", id: r.endpointId, tab: r.breaking ? "changes" : "response" })}>
+                <tr
+                  key={r.endpointId}
+                  className="clickable"
+                  tabIndex={0}
+                  onClick={() => setView({ kind: "endpoint", id: r.endpointId, tab: r.breaking ? "changes" : "response" })}
+                  onKeyDown={(e) => e.key === "Enter" && setView({ kind: "endpoint", id: r.endpointId, tab: r.breaking ? "changes" : "response" })}
+                >
                   <td><span className={`method m-${r.method}`}>{r.method}</span> {r.name}</td>
                   <td>{r.status ? <span className={`status s${String(r.status)[0]}`}>{r.status}</span> : "—"}</td>
                   <td className="muted">{r.timeMs != null ? `${r.timeMs} ms` : ""}</td>

@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileCode2, Play, Save, Trash2 } from "lucide-react";
+import { FileCode2, Play, Save, Trash2, X } from "lucide-react";
 import type { EndpointAuth, EndpointFile, HttpMethod, Revision, SnapshotMeta, SnapshotRedacted } from "@apilot/core";
-import { call } from "../api";
+import { call, confirm, unsaved } from "../api";
 import type { View } from "../App";
-import { ChangesTab, CodeTab, HistoryTab, ResponseTab, SchemaTab, VersionsTab } from "./ResultTabs";
+import { ChangesTab, CodeTab, HistoryTab, ResponseTab, SchemaTab, Spinner, VersionsTab } from "./ResultTabs";
+
+function Tabs({ tabs, active, onChange, label, className = "" }: { tabs: [string, string, number?][]; active: string; onChange: (k: string) => void; label: string; className?: string }) {
+  return (
+    <div className={`tabs ${className}`} role="tablist" aria-label={label}>
+      {tabs.map(([k, text, n]) => (
+        <button key={k} role="tab" aria-selected={active === k} className={active === k ? "active" : ""} onClick={() => onChange(k)}>
+          {text}
+          {n ? <span className="count">{n}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
@@ -37,6 +50,8 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
   const [error, setError] = useState("");
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  unsaved.current = dirty && (!!id || !!draft.name.trim() || draft.url !== EMPTY.url);
+  useEffect(() => () => void (unsaved.current = false), []);
 
   useEffect(() => {
     if (props.tab) setResTab(props.tab);
@@ -73,6 +88,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
     try {
       const r = await call<{ id: string }>("save", { ...clean(draft), id, collection: id ? undefined : collection || undefined });
       setDirty(false);
+      unsaved.current = false;
       setError("");
       if (!id) setView({ kind: "endpoint", id: r.id });
       return r.id;
@@ -101,8 +117,9 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
   };
 
   const remove = async () => {
-    if (!id) return;
+    if (!id || !(await confirm(`Delete “${draft.name || id}”?`, "Delete", `Deletes ${detail?.file ?? "the endpoint file"}.`))) return;
     await call("tool:delete_endpoint", { endpointId: id });
+    unsaved.current = false;
     setView({ kind: "home" });
   };
 
@@ -125,7 +142,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
     ["tests", "Tests"],
   ];
 
-  if (id && !detail) return error ? <div className="banner error pad">{error}</div> : <div className="center muted">Loading…</div>;
+  if (id && !detail) return error ? <div className="page"><div className="banner error">{error}</div></div> : <Spinner />;
 
   return (
     <div className="endpoint" onKeyDown={onKey}>
@@ -143,10 +160,10 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
           </label>
         )}
         {detail && (
-          <span className="muted small">
-            {detail.id}
-            {detail.revisions[0] ? ` · v${detail.revisions[0].revision}` : ""}
-            {dirty ? " · unsaved" : ""}
+          <span className="row gap-s small">
+            <code className="muted">{detail.id}</code>
+            {detail.revisions[0] && <span className="chip">v{detail.revisions[0].revision}</span>}
+            {dirty && <span className="chip unsaved" title="Unsaved changes (Ctrl+S to save)">● unsaved</span>}
           </span>
         )}
         <span className="spacer" />
@@ -163,31 +180,30 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
       </div>
 
       <div className="urlbar">
-        <select value={draft.method} onChange={(e) => edit({ method: e.target.value as HttpMethod })} className={`method-select m-${draft.method}`} aria-label="HTTP method">
-          {METHODS.map((m) => (
-            <option key={m}>{m}</option>
-          ))}
-        </select>
-        <input className="url" value={draft.url} onChange={(e) => edit({ url: e.target.value })} placeholder="{{baseUrl}}/path/{{id}}" spellCheck={false} aria-label="URL" />
-        <button className="primary" onClick={send} disabled={!!busy || !id} title={id ? "Send (Ctrl+Enter)" : "Save first"}>
-          <Play size={14} /> {busy === "run" ? "Sending…" : "Send"}
-        </button>
-        <button onClick={save} disabled={!!busy || !dirty} title="Save (Ctrl+S)">
-          <Save size={14} /> Save
-        </button>
+        <div className="url-combo">
+          <select value={draft.method} onChange={(e) => edit({ method: e.target.value as HttpMethod })} className={`method-select m-${draft.method}`} aria-label="HTTP method">
+            {METHODS.map((m) => (
+              <option key={m}>{m}</option>
+            ))}
+          </select>
+          <input className="url" value={draft.url} onChange={(e) => edit({ url: e.target.value })} placeholder="{{baseUrl}}/path/{{id}}" spellCheck={false} aria-label="URL" />
+        </div>
+        <div className="row gap-s">
+          {id ? (
+            <button className="primary" onClick={send} disabled={!!busy} title="Send (Ctrl+Enter)">
+              {busy === "run" ? <span className="spinner" aria-hidden /> : <Play size={14} />} {busy === "run" ? "Sending…" : "Send"}
+            </button>
+          ) : null}
+          <button className={id ? "" : "primary"} onClick={save} disabled={!!busy || !dirty} title="Save (Ctrl+S)">
+            <Save size={14} /> {id ? "Save" : "Create"}
+          </button>
+        </div>
       </div>
 
       {error && <div className="banner error">{error}</div>}
 
-      <div className="tabs">
-        {tabs.map(([k, label, n]) => (
-          <button key={k} className={reqTab === k ? "active" : ""} onClick={() => setReqTab(k)}>
-            {label}
-            {n ? <span className="count">{n}</span> : null}
-          </button>
-        ))}
-      </div>
-      <div className="tab-body req">
+      <Tabs tabs={tabs} active={reqTab} onChange={setReqTab} label="Request" />
+      <div className="tab-body req" role="tabpanel">
         {reqTab === "params" && <KeyValues value={draft.query} onChange={(query) => edit({ query })} keyLabel="Parameter" />}
         {reqTab === "headers" && <KeyValues value={draft.headers} onChange={(headers) => edit({ headers })} keyLabel="Header" />}
         {reqTab === "auth" && <AuthEditor value={draft.auth} onChange={(auth) => edit({ auth })} />}
@@ -197,21 +213,21 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
 
       {id && detail && (
         <>
-          <div className="tabs results">
-            {[
+          <Tabs
+            className="results"
+            label="Results"
+            active={resTab}
+            onChange={setResTab}
+            tabs={[
               ["response", "Response"],
               ["changes", "Changes"],
-              ["history", `History (${detail.snapshots.length})`],
-              ["versions", `Versions (${detail.revisions.length})`],
+              ["history", "History", detail.snapshots.length],
+              ["versions", "Versions", detail.revisions.length],
               ["schema", "Schema"],
-              ["code", "Code"],
-            ].map(([k, label]) => (
-              <button key={k} className={resTab === k ? "active" : ""} onClick={() => setResTab(k!)}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="tab-body">
+              ["code", "Models"],
+            ]}
+          />
+          <div className="tab-body" role="tabpanel">
             {resTab === "response" && <ResponseTab run={shown} />}
             {resTab === "changes" && <ChangesTab id={id} snapshots={detail.snapshots} version={version} />}
             {resTab === "history" && (
@@ -290,8 +306,8 @@ function KeyValues({ value, onChange, keyLabel }: { value?: Record<string, strin
             </td>
             <td>
               {i < rows.length && (
-                <button className="icon" aria-label="Remove row" onClick={() => commit(rows.filter((_, j) => j !== i))}>
-                  ×
+                <button className="icon" aria-label="Remove row" title="Remove" onClick={() => commit(rows.filter((_, j) => j !== i))}>
+                  <X size={14} />
                 </button>
               )}
             </td>
