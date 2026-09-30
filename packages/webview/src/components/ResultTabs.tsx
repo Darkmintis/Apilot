@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, GitCompare, Info, XCircle } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, Copy, Eye, Flag, GitCompare, Info, Trash2, XCircle } from "lucide-react";
 import type { ApilotSchema, BreakingLevel, DiffResult, Revision, RevisionChange, SnapshotMeta, SnapshotRedacted } from "@apilot/core";
-import { call, persisted, pretty, timeAgo } from "../api";
+import { call, confirm, persisted, pretty, timeAgo } from "../api";
 import { JsonDiff } from "./JsonDiff";
 import type { RunView } from "./EndpointView";
 
@@ -20,7 +20,51 @@ function useLoad<T>(fn: () => Promise<T>, deps: unknown[]): { data?: T; error?: 
 }
 
 const snapLabel = (s: SnapshotMeta) => `${new Date(s.timestamp).toLocaleString()} · ${s.status}${s.baseline ? " · baseline" : ""}${s.revision ? ` · v${s.revision}` : ""}`;
-const copy = (text: string) => navigator.clipboard.writeText(text);
+
+export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      className="icon"
+      title={done ? "Copied" : label}
+      aria-label={label}
+      onClick={() => navigator.clipboard.writeText(text).then(() => (setDone(true), setTimeout(() => setDone(false), 1200)))}
+    >
+      {done ? <Check size={14} className="ok-t" /> : <Copy size={14} />}
+    </button>
+  );
+}
+
+const JSON_TOKEN = /("(?:\\.|[^"\\])*")(\s*:)?|\b(?:true|false)\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+
+/** Pretty JSON with syntax colors; plain text for non-JSON or very large bodies. */
+export function CodeBlock({ text, className = "" }: { text: string; className?: string }) {
+  const json = /^\s*[[{"]/.test(text) && text.length < 300_000;
+  if (!json) return <pre className={`code ${className}`}>{text}</pre>;
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  for (const m of text.matchAll(JSON_TOKEN)) {
+    if (m.index! > last) out.push(text.slice(last, m.index));
+    const t = m[0];
+    const cls = m[2] ? "j-key" : m[1] ? "j-str" : t === "null" ? "j-null" : t === "true" || t === "false" ? "j-bool" : "j-num";
+    out.push(<span key={m.index} className={cls}>{m[1] && m[2] ? m[1] : t}</span>);
+    if (m[1] && m[2]) out.push(m[2]);
+    last = m.index! + t.length;
+  }
+  out.push(text.slice(last));
+  return <pre className={`code ${className}`}>{out}</pre>;
+}
+
+export function Spinner({ label }: { label?: string }) {
+  return (
+    <div className="center muted" role="status">
+      <div className="row gap-s">
+        <span className="spinner" aria-hidden />
+        {label ?? "Loading…"}
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 
@@ -38,9 +82,7 @@ export function ResponseTab({ run }: { run: RunView | null }) {
         <span className="muted">{timeAgo(s.timestamp)}</span>
         <span className="muted small">{s.request.method} {s.request.url}</span>
         <span className="spacer" />
-        <button className="icon" title="Copy body" aria-label="Copy body" onClick={() => copy(body)}>
-          <Copy size={14} />
-        </button>
+        <CopyButton text={body} label="Copy body" />
       </div>
       {s.failures.length > 0 && (
         <div className="banner error">
@@ -71,7 +113,7 @@ export function ResponseTab({ run }: { run: RunView | null }) {
           </tbody>
         </table>
       )}
-      <pre className="code body">{body || <span className="muted">(empty body)</span>}</pre>
+      {body ? <CodeBlock text={body} className="body" /> : <pre className="code body muted">(empty body)</pre>}
     </div>
   );
 }
@@ -101,7 +143,7 @@ export function ChangesTab({ id, snapshots, version }: { id: string; snapshots: 
 
   if (snapshots.length < 1) return <Empty>No responses yet. Send the request — the first successful response becomes the baseline, and later responses are compared to it.</Empty>;
   if (error) return <Empty>{error}</Empty>;
-  if (!data) return <Empty>Comparing…</Empty>;
+  if (!data) return <Spinner label="Comparing…" />;
   const { diff } = data;
   const same = diff.fromId === diff.toId;
 
@@ -214,12 +256,29 @@ export function HistoryTab({ id, snapshots, shownId, show }: { id: string; snaps
             <td className="muted">{s.timeMs} ms</td>
             <td className="muted">{s.revision ? `v${s.revision}` : ""}</td>
             <td className="actions">
-              <button className="link" onClick={() => show(s.id)}>View</button>
+              <button className="icon" title="View response" aria-label="View response" onClick={() => show(s.id)}>
+                <Eye size={14} />
+              </button>
               {baseline && !s.baseline && (
-                <button className="link" onClick={() => call("nativeDiff", { kind: "snapshot", id, from: baseline.id, to: s.id })}>Diff vs baseline</button>
+                <button className="icon" title="Diff vs baseline in editor" aria-label="Diff vs baseline" onClick={() => call("nativeDiff", { kind: "snapshot", id, from: baseline.id, to: s.id })}>
+                  <GitCompare size={14} />
+                </button>
               )}
-              {!s.baseline && s.passed && <button className="link" onClick={() => call("tool:set_baseline", { endpointId: id, snapshotId: s.id })}>Make baseline</button>}
-              {!s.baseline && <button className="link danger" onClick={() => call("tool:delete_snapshot", { endpointId: id, snapshotId: s.id })}>Delete</button>}
+              {!s.baseline && s.passed && (
+                <button className="icon" title="Make baseline" aria-label="Make baseline" onClick={() => call("tool:set_baseline", { endpointId: id, snapshotId: s.id })}>
+                  <Flag size={14} />
+                </button>
+              )}
+              {!s.baseline && (
+                <button
+                  className="icon danger"
+                  title="Delete response"
+                  aria-label="Delete response"
+                  onClick={async () => (await confirm("Delete this saved response?", "Delete", `${new Date(s.timestamp).toLocaleString()} · ${s.status}`)) && call("tool:delete_snapshot", { endpointId: id, snapshotId: s.id })}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
             </td>
           </tr>
         ))}
@@ -249,7 +308,12 @@ export function VersionsTab({ id, revisions, dirty }: { id: string; revisions: R
             <span>{r.label ? <b>{r.label}</b> : null} {r.summary}</span>
             <span className="muted small">{timeAgo(r.timestamp)}</span>
             {r.revision !== latest && (
-              <button className="link" disabled={dirty} title={dirty ? "Save or discard your edits first" : ""} onClick={() => call("tool:restore_revision", { endpointId: id, revision: r.revision })}>
+              <button
+                className="link"
+                disabled={dirty}
+                title={dirty ? "Save or discard your edits first" : `Restore v${r.revision} as a new version`}
+                onClick={async () => (await confirm(`Restore v${r.revision}?`, "Restore", "The current request is kept as a version, so you can undo this.")) && call("tool:restore_revision", { endpointId: id, revision: r.revision })}
+              >
                 Restore
               </button>
             )}
@@ -301,7 +365,8 @@ const short = (v: unknown) => {
 export function SchemaTab({ id, version }: { id: string; version: number }) {
   const { data, error } = useLoad<ApilotSchema>(() => call("schema", { id }), [id, version]);
   if (error) return <Empty>{error}</Empty>;
-  if (!data) return <Empty>Loading…</Empty>;
+  if (!data) return <Spinner />;
+  if (!data.type) return <Empty>No schema yet. It is learned from successful responses, so send the request first.</Empty>;
   return (
     <div>
       <p className="muted small">Learned from every successful response. Required = present in all of them; nullable = seen as null.</p>
@@ -402,9 +467,7 @@ export function CodeTab({ id, version }: { id: string; version: number }) {
           <div className="row file-head">
             <code>{f.path}</code>
             <span className="spacer" />
-            <button className="icon" aria-label={`Copy ${f.path}`} title="Copy" onClick={() => copy(f.content)}>
-              <Copy size={14} />
-            </button>
+            <CopyButton text={f.content} label={`Copy ${f.path}`} />
           </div>
           <pre className="code">{f.content}</pre>
         </div>
