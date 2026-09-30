@@ -42,6 +42,9 @@ class KeychainSecrets implements SecretProvider {
   async set(env: string, name: string, value: string) {
     await this.store.store(this.key(env, name), value);
   }
+  async delete(env: string, name: string) {
+    await this.store.delete(this.key(env, name));
+  }
   async prompt(env: string, names: string[]) {
     for (const name of names) {
       const value = await vscode.window.showInputBox({
@@ -374,6 +377,8 @@ class ApilotExtension implements vscode.Disposable {
         return this.nativeDiff(a);
       case "setupAi":
         return this.setupAi(true);
+      case "confirm":
+        return (await vscode.window.showWarningMessage(String(a.message), { modal: true, detail: a.detail ? String(a.detail) : undefined }, String(a.action ?? "OK"))) !== undefined;
       default:
         throw new Error(`Unknown request "${method}"`);
     }
