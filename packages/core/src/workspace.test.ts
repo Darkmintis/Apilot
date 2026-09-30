@@ -31,6 +31,7 @@ function makeWorkspace() {
   const secrets: SecretProvider = {
     get: async (env, name) => vault.get(`${env}:${name}`),
     set: async (env, name, value) => void vault.set(`${env}:${name}`, value),
+    delete: async (env, name) => void vault.delete(`${env}:${name}`),
   };
   const ws = new Workspace(root, { secrets });
   ws.init("test");
@@ -88,6 +89,9 @@ describe("Workspace end-to-end", () => {
     expect(file).not.toContain("abc.def.ghi");
     expect(file).toContain("{{authToken}}");
     expect(vault.get("dev:authToken")).toBe("abc.def.ghi");
+    // Deleting a secret variable also forgets its keychain value.
+    await ws.deleteVariable("dev", "authToken");
+    expect(vault.has("dev:authToken")).toBe(false);
     expect(ws.endpoint(res.created[0]!).definition).toMatchObject({ method: "POST", query: { draft: "1" }, body: { sku: "A1" } });
   });
 

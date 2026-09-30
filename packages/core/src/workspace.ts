@@ -38,6 +38,8 @@ export interface SecretProvider {
   get(env: string, name: string): Promise<string | undefined>;
   /** Store a value (editor keychain only; CI providers omit this). */
   set?(env: string, name: string, value: string): Promise<void>;
+  /** Forget a stored value when its variable is deleted. */
+  delete?(env: string, name: string): Promise<void>;
   /** Ask the user for missing values, e.g. with a password prompt. */
   prompt?(env: string, names: string[]): Promise<void>;
 }
@@ -237,10 +239,12 @@ export class Workspace {
     }
   }
 
-  deleteVariable(envName: string, name: string): void {
+  async deleteVariable(envName: string, name: string): Promise<void> {
     const env = this.environment(envName);
+    const wasSecret = env.variables[name]?.type === "secret";
     delete env.variables[name];
     this.writeEnv(env);
+    if (wasSecret) await this.secrets.delete?.(env.name, name);
   }
 
   createEnvironment(name: string, copyFrom?: string): void {

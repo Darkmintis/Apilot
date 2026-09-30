@@ -178,7 +178,7 @@ export async function callTool(ws: Workspace, name: string, args: Json = {}): Pr
     }
     case "delete_variable": {
       const envName = ws.envName(args.env as string | undefined);
-      ws.deleteVariable(envName, args.name as string);
+      await ws.deleteVariable(envName, args.name as string);
       return { env: envName, deleted: args.name };
     }
     case "create_environment":
