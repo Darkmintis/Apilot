@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as parseYaml, stringify as toYaml } from "yaml";
 import { Workspace, importSpec, type SecretProvider } from "../src/index";
 
 const TOKEN = "tok-super-secret-9f8e7d";
@@ -101,5 +102,95 @@ describe("Workspace end-to-end", () => {
     await ws.setVariable("dev", "baseUrl", "text", baseUrl);
     ws.saveEndpoint({ collection: "a", name: "Me", method: "GET", url: "{{baseUrl}}/orders", auth: { type: "bearer", token: "{{authToken}}" } });
     await expect(ws.run("a.me")).rejects.toThrow(/Missing secret value\(s\) for "dev": authToken/);
+  });
+
+  it("inherits headers and auth from nested _folder.yaml files", async () => {
+    const { ws, root } = makeWorkspace();
+    await ws.setVariable("dev", "baseUrl", "text", baseUrl);
+
+    // Create nested folders with _folder.yaml inheritance
+    mkdirSync(join(root, ".apilot/collections/orders"), { recursive: true });
+    mkdirSync(join(root, ".apilot/collections/orders/items"), { recursive: true });
+    writeFileSync(join(root, ".apilot/collections/orders/_folder.yaml"), toYaml({ headers: { Accept: "application/json" }, auth: { type: "bearer", token: "{{authToken}}" } }));
+    writeFileSync(join(root, ".apilot/collections/orders/items/_folder.yaml"), toYaml({ headers: { "X-Custom": "inherited", "X-Deep": "yes" } }));
+
+    ws.saveEndpoint({ collection: "orders/items", name: "Deep", method: "GET", url: "{{baseUrl}}/orders" });
+    const { snapshot } = await ws.run("orders/items.deep");
+    // Inherited headers are in the request
+    expect(snapshot.request.headers["Accept"]).toBe("application/json");
+    expect(snapshot.request.headers["X-Custom"]).toBe("inherited");
+    expect(snapshot.request.headers["X-Deep"]).toBe("yes");
+    // Auth from the parent folder is applied (value redacted in snapshot)
+    expect(snapshot.request.headers["Authorization"]).toBe("⟦REDACTED⟧");
+  });
+
+  it("restoreRevision creates a new revision with the old definition", () => {
+    const { ws } = makeWorkspace();
+    ws.saveEndpoint({ collection: "orders", name: "Get", method: "GET", url: "{{baseUrl}}/orders" });
+    // Modify to v2
+    ws.saveEndpoint({ id: "orders.get", name: "Get order", method: "GET", url: "{{baseUrl}}/orders/{{id}}" });
+    // Restore v1 — creates a new revision (v3) with v1's definition
+    const result = ws.restoreRevision("orders.get", 1);
+    const revs = ws.revisions("orders.get");
+    expect(revs.map((r) => r.revision)).toEqual([3, 2, 1]);
+    expect(result).toBe(3);
+    // The label records that this was a restore
+    expect(revs[0]!.label).toBe("Restored v1");
+    // The definition matches v1's
+    const { definition } = ws.endpoint("orders.get");
+    expect(definition.url).toBe("{{baseUrl}}/orders");
+    expect(definition.name).toBe("Get");
+  });
+
+  it("deleteSnapshot removes a non-baseline snapshot from the list", async () => {
+    const { ws } = makeWorkspace();
+    await ws.setVariable("dev", "baseUrl", "text", baseUrl);
+    ws.saveEndpoint({ collection: "orders", name: "Get", method: "GET", url: "{{baseUrl}}/orders/7", auth: { type: "bearer", token: "{{authToken}}" } });
+
+    // First run → baseline
+    await ws.run("orders.get");
+    // Second run → non-baseline snapshot
+    await ws.run("orders.get");
+    const snaps = ws.snapshots("orders.get");
+    expect(snaps).toHaveLength(2);
+    expect(snaps[0]!.baseline).toBe(false); // newest is not baseline
+    expect(snaps[1]!.baseline).toBe(true);  // oldest is baseline
+
+    // Delete the non-baseline (newest) snapshot
+    ws.deleteSnapshot("orders.get", snaps[0]!.id);
+    const after = ws.snapshots("orders.get");
+    expect(after).toHaveLength(1);
+    expect(after[0]!.id).toBe(snaps[1]!.id);
+  });
+
+  it("runAll filters by collection and runs only matching endpoints", async () => {
+    const { ws } = makeWorkspace();
+    await ws.setVariable("dev", "baseUrl", "text", baseUrl);
+    ws.saveEndpoint({ collection: "alpha", name: "A1", method: "GET", url: "{{baseUrl}}/orders", auth: { type: "bearer", token: "{{authToken}}" } });
+    ws.saveEndpoint({ collection: "alpha", name: "A2", method: "GET", url: "{{baseUrl}}/orders", auth: { type: "bearer", token: "{{authToken}}" } });
+    ws.saveEndpoint({ collection: "beta", name: "B1", method: "GET", url: "{{baseUrl}}/orders", auth: { type: "bearer", token: "{{authToken}}" } });
+
+    const filtered = await ws.runAll("alpha");
+    expect(filtered.results.map((r) => r.endpointId)).toEqual(["alpha.a1", "alpha.a2"]);
+    expect(filtered.passed).toBe(2);
+
+    const all = await ws.runAll(undefined);
+    expect(all.results).toHaveLength(4); // 3 created + 1 default "example" endpoint from init
+    expect(all.results.map((r) => r.endpointId)).toEqual(expect.arrayContaining(["alpha.a1", "alpha.a2", "beta.b1"]));
+    expect(all.passed).toBe(3);
+  });
+
+  it("runAll handles individual endpoint failures without stopping", async () => {
+    const { ws } = makeWorkspace();
+    await ws.setVariable("dev", "baseUrl", "text", baseUrl);
+    ws.saveEndpoint({ collection: "x", name: "Good", method: "GET", url: "{{baseUrl}}/orders", auth: { type: "bearer", token: "{{authToken}}" } });
+    ws.saveEndpoint({ collection: "x", name: "Bad", method: "GET", url: "{{baseUrl}}/nonexistent", auth: { type: "bearer", token: "{{authToken}}" } });
+
+    const result = await ws.runAll("x");
+    expect(result.results).toHaveLength(2);
+    expect(result.passed).toBe(1);
+    expect(result.failed).toBe(1);
+    // The "Bad" endpoint gets a 404, so it fails its assertion
+    expect(result.results.find((r) => r.endpointId === "x.bad")!.passed).toBe(false);
   });
 });
