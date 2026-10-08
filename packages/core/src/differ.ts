@@ -53,6 +53,12 @@ export class Differ {
     if (opts.from.status !== opts.to.status) {
       push("@status", "statusChanged", `Status changed from ${opts.from.status} to ${opts.to.status}`,
         { fromValue: opts.from.status, toValue: opts.to.status });
+      // Crossing the ok↔error boundary changes the response shape by nature:
+      // a success body and an error body are structurally different contracts.
+      if (isOk(opts.from.status) !== isOk(opts.to.status)) {
+        push("@body", "errorShapeChanged", `Response shape changed from ${isOk(opts.from.status) ? "success" : "error"} to ${isOk(opts.to.status) ? "success" : "error"}.`,
+          { fromValue: `${opts.from.status} (${isOk(opts.from.status) ? "ok" : "error"}) body`, toValue: `${opts.to.status} (${isOk(opts.to.status) ? "ok" : "error"}) body` });
+      }
     }
 
     // An error response has a different shape by nature; comparing it to a

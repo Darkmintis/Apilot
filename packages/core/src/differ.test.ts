@@ -128,13 +128,35 @@ describe("Differ", () => {
     expect(result.changes).toHaveLength(0);
   });
 
-  it("detects enum value removal as breaking", () => {
-    // Simulate via status or known enum sets is handled at schema level.
-    // Here we test that adding a value to an enum-like field is a warning.
-    // The differ operates on snapshot bodies; enum detection is schema-level.
-    const from = makeSnapshot("orders.list", { status: "pending" });
-    const to = makeSnapshot("orders.list", { status: "pending" });
+  it("classifies enum value removal as info (generated code has an 'unknown' fallback)", () => {
+    // 4+ samples, ≤10 unique values, ≤60% unique → enum detected
+    const from = makeSnapshot("orders.list", Array(4).fill(null).map((_, i) => ({ status: i < 2 ? "paid" : "open" })));
+    const to = makeSnapshot("orders.list", Array(4).fill(null).map((_, i) => ({ status: i < 3 ? "paid" : "pending" })));
     const result = differ.diff({ endpointId: "orders.list", from, to });
+
+    const removed = result.changes.find((c) => c.kind === "enumValueRemoved");
+    expect(removed).toBeDefined();
+    expect(removed!.level).toBe("info");
     expect(result.breaking).toBe(false);
+  });
+
+  it("flags errorShapeChanged when crossing the ok↔error boundary", () => {
+    const from = makeSnapshot("orders.list", { data: "ok" }, 200);
+    const to = makeSnapshot("orders.list", { error: "bad" }, 500);
+    const result = differ.diff({ endpointId: "orders.list", from, to });
+
+    expect(result.breaking).toBe(true);
+    expect(result.changes.find((c) => c.kind === "statusChanged")).toBeDefined();
+    const shape = result.changes.find((c) => c.kind === "errorShapeChanged");
+    expect(shape).toBeDefined();
+    expect(shape!.path).toBe("@body");
+    expect(shape!.level).toBe("breaking");
+  });
+
+  it("does not emit errorShapeChanged when both sides are ok (even if status differs)", () => {
+    const from = makeSnapshot("orders.list", { a: 1 }, 200);
+    const to = makeSnapshot("orders.list", { a: 1 }, 201);
+    const result = differ.diff({ endpointId: "orders.list", from, to });
+    expect(result.changes.find((c) => c.kind === "errorShapeChanged")).toBeUndefined();
   });
 });
