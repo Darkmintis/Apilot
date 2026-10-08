@@ -4,7 +4,9 @@
  * Rule: every snapshot and MCP response is run through this before it is
  * written to disk or shown to an AI.  We mask:
  *  1. Known secret values (passed in from the resolved variable set).
- *  2. Common secret patterns (JWT, Bearer tokens, API keys in headers).
+ *  2. Sensitive URL query parameters by name (token, api_key, etc.).
+ *  3. Common secret patterns (JWT, Bearer tokens, AWS keys, password= in forms).
+ *  4. Sensitive header and body keys by name.
  *
  * Performance: single pass; O(n) in the number of redaction targets.
  */
@@ -26,7 +28,16 @@ const DEFAULT_MASK_HEADERS = [
   "api-key",
   "token",
   "proxy-authorization",
+  "x-csrf-token",
+  "x-secret",
 ];
+
+/** Query parameter names whose values are treated as secrets. */
+const SENSITIVE_QUERY_PARAMS = new Set([
+  "token", "access_token", "access-token", "refreshtoken", "refresh_token", "refresh-token",
+  "apikey", "api_key", "api-key", "secret", "password", "passwd", "pwd",
+  "auth", "auth_token", "authtoken", "key", "apikey", "credentials",
+]);
 
 export class Redactor {
   private readonly secretValues: string[];
@@ -60,7 +71,7 @@ export class Redactor {
   }
 
   redactString(value: string): string {
-    let out = value;
+    let out = this.redactUrl(value);
     // 1. Exact secret substrings
     for (const secret of this.secretValues) {
       if (secret.length > 3 && out.includes(secret)) {
@@ -72,6 +83,36 @@ export class Redactor {
       out = out.replace(pattern, this.replacement);
     }
     return out;
+  }
+
+  /**
+   * If the string looks like a URL, redact sensitive query parameters by name.
+   * This catches cases where a secret value is not known exactly (e.g. a
+   * redirect URL echoing a token) but the param name reveals it.
+   */
+  redactUrl(value: string): string {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return value;
+    }
+    if (!url.searchParams.toString()) return value;
+
+    const parts: string[] = [];
+    let changed = false;
+    for (const [key, val] of url.searchParams) {
+      const isSensitive = SENSITIVE_QUERY_PARAMS.has(key.toLowerCase()) && val;
+      if (isSensitive) {
+        parts.push(`${encodeURIComponent(key)}=${this.replacement}`);
+        changed = true;
+      } else {
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
+      }
+    }
+    if (!changed) return value;
+    const origin = url.origin === "null" ? "" : url.origin;
+    return `${origin}${url.pathname}?${parts.join("&")}${url.hash}`;
   }
 
   redactHeaders(headers: Record<string, string>): Record<string, string> {
@@ -116,6 +157,6 @@ export class Redactor {
   }
 
   isSensitiveKey(key: string): boolean {
-    return /(password|passwd|secret|token|api[_-]?key|authorization|private[_-]?key|access[_-]?key)$/i.test(key);
+    return /(password|passwd|pwd|secret|token|api[_-]?key|authorization|credentials|private[_-]?key|access[_-]?key|session|jwt|cookie|client[_-]?secret)$/i.test(key);
   }
 }
