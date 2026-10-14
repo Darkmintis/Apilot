@@ -3,18 +3,24 @@
 # test-local.sh — Local testing workflow for the Apilot VS Code extension.
 #
 # Usage:
-#   ./scripts/test-local.sh dev    # Launch VS Code with the extension in development mode (live reload)
-#   ./scripts/test-local.sh vsix   # Build + package a .vsix and install it into VS Code / Cursor
-#   ./scripts/test-local.sh test   # Run the full automated test suite (unit + integration + MCP + CLI)
-#   ./scripts/test-local.sh watch  # Start the extension + webview build in watch mode (for `dev`)
-#   ./scripts/test-local.sh clean  # Remove all build artifacts
+#   ./scripts/test-local.sh dev      # Launch VS Code with the extension in development mode (live reload)
+#   ./scripts/test-local.sh vsix     # Build + package a .vsix, install it, and launch the editor
+#   ./scripts/test-local.sh install  # Build + package a .vsix and install into your editor (no launch)
+#   ./scripts/test-local.sh test     # Run the full automated test suite (unit + integration + MCP + CLI)
+#   ./scripts/test-local.sh watch    # Start the extension bundle in watch mode (for `dev`)
+#   ./scripts/test-local.sh clean    # Remove all build artifacts
+#
+# Editor selection:
+#   The script uses Cursor if installed, otherwise VS Code. Override with:
+#     export APILOT_EDITOR=code     # force VS Code
+#     export APILOT_EDITOR=cursor   # force Cursor
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# ── helpers ────────────────────────────────────────────────────────────────────
 
 info()  { printf '\033[1;36m▶ %s\033[0m\n' "$*"; }
 ok()    { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
@@ -22,7 +28,18 @@ warn()  { printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
 
 PROJECT="${ROOT}/packages/mcp/test-project"
 
-# ── build helpers ────────────────────────────────────────────────────────────
+# Pick the editor: honour APILOT_EDITOR, fall back to cursor → code.
+pick_editor() {
+  if [ -n "${APILOT_EDITOR:-}" ]; then
+    command -v "$APILOT_EDITOR" >/dev/null 2>&1 && echo "$APILOT_EDITOR" && return
+  fi
+  command -v cursor >/dev/null 2>&1 && echo cursor && return
+  echo code
+}
+
+EDITOR_BIN="$(pick_editor)"
+
+# ── build helpers ─────────────────────────────────────────────────────────────
 
 build_all() {
   info "Building all packages (core, codegen, mcp, cli, skill)"
@@ -36,13 +53,18 @@ build_all() {
   ok "All packages built"
 }
 
-# ── subcommands ──────────────────────────────────────────────────────────────
+latest_vsix() {
+  ls -t "$ROOT"/packages/extension/apilot-*.vsix 2>/dev/null | head -1
+}
+
+# ── subcommands ───────────────────────────────────────────────────────────────
 
 cmd_watch() {
-  info "Starting watch mode (extension host + MCP + webview)…"
-  info "Edit source files and see changes reload in the launched VS Code window."
+  info "Starting watch mode (extension host + MCP bundle)…"
+  info "Edit TypeScript source files and see the extension reload in the editor."
+  info "Note: the webview (React UI) is NOT rebuilt by watch — rerun"
+  info "      'pnpm --filter apilot-webview build' for webview changes."
   info "Press Ctrl-C when done."
-  # watch mode for the extension (esbuild bundles extension.js + mcp.mjs on change)
   pnpm --filter apilot watch
 }
 
@@ -61,31 +83,37 @@ cmd_dev() {
 
   code \
     --extensionDevelopmentPath="$ROOT/packages/extension" \
-    --disable-extension-apilot-dev.apilot \
+    --disable-extension apilot-dev.apilot \
     "$PROJECT"
 }
 
-cmd_vsix() {
+cmd_install() {
   build_all
 
   info "Packaging .vsix (production bundle)…"
   pnpm --filter apilot exec vsce package --no-dependencies
 
-  VSIX="$(ls -t "$ROOT"/packages/extension/apilot-*.vsix | head -1)"
+  VSIX="$(latest_vsix)"
+  if [ -z "$VSIX" ]; then
+    warn "No .vsix found after packaging — did vsce fail?"
+    exit 1
+  fi
   ok "Built $(basename "$VSIX")"
 
-  # Install into whichever editor the user prefers (Cursor if open, else VS Code).
-  if command -v cursor &>/dev/null; then
-    info "Installing VSIX into Cursor…"
-    cursor --install-extension "$VSIX" --force 2>/dev/null || true
-    ok "Installed into Cursor. Launching…"
-    cursor "$PROJECT"
-  else
-    info "Installing VSIX into VS Code…"
-    code --install-extension "$VSIX" --force
-    ok "Installed into VS Code. Launching…"
-    code "$PROJECT"
-  fi
+  info "Installing into $EDITOR_BIN…"
+  "$EDITOR_BIN" --install-extension "$VSIX" --force 2>&1 || true
+  ok "Installed apilot-dev.apilot into $EDITOR_BIN"
+  echo
+  info "Open any project folder to test:"
+  info "  $EDITOR_BIN /path/to/your/project"
+  info "Or open the sample project:"
+  info "  $EDITOR_BIN $PROJECT"
+}
+
+cmd_vsix() {
+  cmd_install
+  info "Launching $EDITOR_BIN with the sample project…"
+  "$EDITOR_BIN" "$PROJECT"
 }
 
 cmd_test() {
@@ -140,17 +168,22 @@ case "${1:-}" in
   watch)  cmd_watch ;;
   dev)    cmd_dev ;;
   vsix)   cmd_vsix ;;
+  install) cmd_install ;;
   test)   cmd_test ;;
   clean)  cmd_clean ;;
   ""|help|-h|--help)
     cat <<'EOF'
 Apilot local testing workflow
 
-  test-local.sh dev    Launch VS Code with the extension in development mode
-  test-local.sh vsix   Build + package a .vsix and install into Cursor/VS Code
-  test-local.sh watch  Start extension + webview watch mode (for `dev`)
-  test-local.sh test   Run full automated test suite
-  test-local.sh clean  Remove all build artifacts
+  test-local.sh dev      Launch VS Code with the extension in development mode
+  test-local.sh install  Build + package a .vsix and install into your editor
+  test-local.sh vsix     Build + package + install + launch the editor
+  test-local.sh watch    Start extension bundle watch mode (for `dev`)
+  test-local.sh test     Run full automated test suite
+  test-local.sh clean    Remove all build artifacts
+
+Set APILOT_EDITOR=code or APILOT_EDITOR=cursor to choose your editor.
+Default: Cursor if installed, otherwise VS Code.
 EOF
     ;;
   *)

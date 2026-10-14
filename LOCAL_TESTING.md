@@ -1,20 +1,27 @@
 # Local Testing Guide
 
-This guide explains how to test the Apilot VS Code extension locally — everything from rapid development iteration to full automated verification — before publishing.
+This guide explains how to test the Apilot VS Code extension locally — from rapid
+development iteration to full automated verification — before publishing.
 
 ## Quick start
 
 ```bash
-# One command: build + run the entire test suite
+# Run the full automated test suite (unit + integration + MCP + CLI)
 ./scripts/test-local.sh test
 
-# Development mode: live-reload while you code
-./scripts/test-local.sh watch   # terminal 1 — rebuild on save
-./scripts/test-local.sh dev     # terminal 2 — launches VS Code with the extension
+# Quick iteration: rebuild on save + live reload in VS Code
+./scripts/test-local.sh watch   # terminal 1
+./scripts/test-local.sh dev     # terminal 2
 
-# Package + install a real .vsix (what users will install)
+# Package + install as a real .vsix (what marketplace users get), then launch
 ./scripts/test-local.sh vsix
+
+# Just build + install the .vsix without launching the editor
+./scripts/test-local.sh install
 ```
+
+> By default the script targets **Cursor** if installed, otherwise **VS Code**.
+> Override with: `export APILOT_EDITOR=code` or `export APILOT_EDITOR=cursor`
 
 ---
 
@@ -59,43 +66,54 @@ This is the fastest loop for day-to-day development:
 ```bash
 ./scripts/test-local.sh watch
 ```
-This runs `pnpm --filter apilot watch`, which uses esbuild to rebuild `dist/extension.js`
-and `dist/mcp.mjs` on every source save. VS Code auto-reloads the extension when the
-bundled files change.
+This runs `pnpm --filter apilot watch`, which uses esbuild to rebuild
+`dist/extension.js` and `dist/mcp.mjs` on every source save. VS Code
+auto-reloads the extension when the bundled files change.
 
 **Terminal 2 — launch VS Code:**
 ```bash
 ./scripts/test-local.sh dev
 ```
-This launches VS Code with `--extensionDevelopmentPath=packages/extension` and opens the
-sample test project (`packages/mcp/test-project`). The extension is loaded from source
-(under `dist/`), not from an installed `.vsix`.
+This launches VS Code with `--extensionDevelopmentPath=packages/extension` and
+opens the sample test project. The extension is loaded from source (under `dist/`),
+not from an installed `.vsix`.
 
-> **Webview changes:** The React UI is built into `dist/webview/`. esbuild's watch mode
-> does **not** rebuild the webview. After editing the webview, rerun:
+> **Webview changes:** The React UI is built into `dist/webview/`. esbuild's watch
+> mode does **not** rebuild the webview. After editing the webview, rerun:
 > ```bash
 > pnpm --filter apilot-webview build
 > ```
 
-**If the extension is already installed** (from a previous `.vsix` install), the `dev`
-command adds `--disable-extension-apilot-dev.apilot` to prevent conflicts.
+> If the extension is already installed (from a previous `.vsix` install), the `dev`
+> command adds `--disable-extension apilot-dev.apilot` to prevent conflicts.
 
-### 2. VSIX install (`vsix`)
+### 2. VSIX install (`install` / `vsix`)
 
-This builds a production bundle and installs it as a real `.vsix` — exactly what a
-marketplace user would get:
+This builds a **production bundle** and installs it as a real `.vsix` — exactly what
+a marketplace user would get. This is the closest you can get to the published
+experience without actually publishing.
 
 ```bash
-./scripts/test-local.sh vsix
+./scripts/test-local.sh install  # build + package + install (no launch)
+./scripts/test-local.sh vsix     # same + launches the editor
 ```
 
 What it does:
 1. Builds all packages (core → codegen → mcp → cli → skill → webview → extension)
 2. Packages the `.vsix` with `vsce package --no-dependencies`
 3. Installs it into **Cursor** (if available) or **VS Code** with `--force`
-4. Opens the sample test project
+4. (`vsix` only) Opens the sample test project
 
-To do this manually:
+**The `.vsix` is self-contained.** It bundles:
+- `dist/extension.js` — the extension host code
+- `dist/mcp.mjs` — the MCP server (24 tools, esbuild-bundled)
+- `dist/webview/index.js` + `dist/webview/style.css` — the React panel UI
+- Icons and license
+
+No separate installation of CLI, MCP server, or codegen is needed in the editor —
+they're all bundled inside.
+
+**To install manually:**
 ```bash
 # Build everything
 pnpm build
@@ -107,13 +125,13 @@ pnpm --filter apilot exec vsce package --no-dependencies
 # Install into VS Code (or `cursor --install-extension … --force`)
 code --install-extension packages/extension/apilot-0.1.0.vsix --force
 
-# Open the test project
-code packages/mcp/test-project
+# Open any project folder to test
+code /path/to/your/project
 ```
 
 ### 3. Automated tests (`test`)
 
-Runs the full suite that CI runs (minus the Dart codegen check):
+Runs the full suite that CI runs (minus the optional Dart codegen job):
 
 ```bash
 ./scripts/test-local.sh test
@@ -128,7 +146,7 @@ This runs:
 | Unit tests (webview) | 24 tests: React components (JSON diff, result tabs, App) |
 | MCP smoke test (source) | Starts the MCP server over stdio, lists 24 tools, calls `list_endpoints` |
 | MCP smoke test (bundle) | Same test against the esbuild-bundled `dist/mcp.mjs` |
-| Extension integration tests | 4 tests in a real VS Code: commands registered, AI auto-setup, bridge auth + tool calls, panel opens |
+| Extension integration tests | 4 tests in a real VS Code: commands, AI auto-setup, bridge auth, panel opens |
 | CLI check | `apilot check` against the sample project (HTTP 200 on both endpoints) |
 
 **Individual commands you can run separately:**
@@ -141,7 +159,7 @@ pnpm --filter @apilot/mcp exec vitest run
 pnpm --filter apilot-webview exec vitest run
 
 # MCP smoke test
-node scripts/verify-mcp.js                          # source build
+node scripts/verify-mcp.js                           # source build
 node scripts/verify-mcp.js packages/extension/dist/mcp.mjs  # extension bundle
 
 # Extension integration tests (launches real VS Code)
@@ -166,10 +184,44 @@ Removes all `dist/`, `.tsbuildinfo`, and `.vsix` files across every package.
 
 ---
 
+## Testing in other projects
+
+To test the extension in a project of your own:
+
+1. **Install the `.vsix`:**
+   ```bash
+   ./scripts/test-local.sh install
+   ```
+
+2. **Open your project in Cursor/VS Code:**
+   ```bash
+   cursor /path/to/your/project
+   # or
+   code /path/to/your/project
+   ```
+
+3. **If your project doesn't have an `.apilot/` folder yet:**
+   - The Apilot panel will show a welcome view with **Initialize Apilot Project**.
+   - Or run `Cmd/Ctrl+Shift+P` → "Apilot: Initialize Project" and enter a name.
+
+4. **If your project already has an `.apilot/` folder:**
+   - The extension activates automatically.
+   - Endpoints show up in the **Apilot** sidebar view.
+   - Open the panel with the "Apilot: Open Panel" command.
+
+5. **After making code changes, reinstall:**
+   ```bash
+   ./scripts/test-local.sh install   # rebuilds + reinstalls the .vsix
+   ```
+   Then reload the window (`Ctrl+Shift+P` → "Developer: Reload Window").
+
+---
+
 ## The sample test project
 
-`packages/mcp/test-project/` is a ready-to-use Apilot project with two endpoints hitting
-the public [JSONPlaceholder](https://jsonplaceholder.typicode.com) API (no auth required):
+`packages/mcp/test-project/` is a ready-to-use Apilot project with two endpoints
+hitting the public [JSONPlaceholder](https://jsonplaceholder.typicode.com) API
+(no auth required):
 
 - **orders.list** — `GET /posts?userId=1` (chains `postId` into the next request)
 - **orders.get** — `GET /posts/{postId}`
@@ -179,8 +231,8 @@ The `dev` environment has:
 - `authToken` → a secret variable (set via `APILOT_SECRET_authToken` in CI)
 - `userId` → `1` (text)
 
-Snapshots are gitignored (`.apilot/snapshots/`) but request history is committed
-(`.apilot/history/`). This means:
+Snapshots and history are gitignored (`.apilot/snapshots/` and `.apilot/history/`).
+This means:
 - Running the endpoints saves fresh snapshots for testing
 - The baseline/comparison logic stays consistent across runs
 - You can test breaking-change detection by modifying a request
@@ -190,11 +242,10 @@ Snapshots are gitignored (`.apilot/snapshots/`) but request history is committed
 ## Testing workflow for CI parity
 
 The `scripts/test-local.sh test` command mirrors what `.github/workflows/ci.yml` does
-(excluding the optional Dart codegen job). You can use it as a pre-push gate:
+(excluding the optional Dart codegen job and VSIX packaging + artifact upload).
+You can use it as a pre-push gate:
 
 ```bash
-pre-commit run apilot-test  # if you use pre-commit
-# or
 ./scripts/test-local.sh test  # manually before publishing
 ```
 
