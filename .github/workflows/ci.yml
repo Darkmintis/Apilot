@@ -6,71 +6,90 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build, test, package
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # pnpm 11 needs Node >= 22.13 (uses node:sqlite)
+          node-version: 22
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install
+        run: pnpm install --frozen-lockfile
 
       - name: Build packages
         run: pnpm -r --filter "./packages/*" --filter "!apilot" --filter "!apilot-webview" build
 
-      - name: Build webview + extension bundle
+      - name: Build webview + extension
         run: |
           pnpm --filter apilot-webview build
           pnpm --filter apilot compile
 
       - name: Unit tests
         run: |
-          pnpm --filter @apilot/core exec vitest run
-          pnpm --filter @apilot/codegen exec vitest run
+          pnpm --filter @apilot/core exec vitest run --pool=threads
+          pnpm --filter @apilot/codegen exec vitest run --pool=threads
+          pnpm --filter @apilot/mcp exec vitest run --pool=threads
+          pnpm --filter apilot-webview exec vitest run --pool=threads
 
-      - name: MCP server (source build and the bundle the extension ships)
+      - name: MCP server (source + extension bundle)
         run: |
           node scripts/verify-mcp.js
           node scripts/verify-mcp.js packages/extension/dist/mcp.mjs
 
-      - name: Extension integration tests (real VS Code)
+      - name: Extension integration tests
         run: xvfb-run -a pnpm --filter apilot test
 
-      - name: apilot check against the sample project
+      - name: CLI check (sample project)
         working-directory: packages/mcp/test-project
         env:
           APILOT_SECRET_authToken: ci-test-token
         run: node ../../cli/dist/index.js check --env dev --markdown "$GITHUB_STEP_SUMMARY"
 
-      - name: Package extension
-        run: pnpm --filter apilot exec vsce package --no-dependencies
+      - name: Package .vsix
+        run: pnpm --filter apilot package
 
       - uses: actions/upload-artifact@v4
         with:
           name: apilot-vsix
           path: packages/extension/*.vsix
+          if-no-files-found: error
+          retention-days: 14
 
   dart-codegen:
+    name: Dart codegen verify
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
+
       - uses: dart-lang/setup-dart@v1
+
       - run: pnpm install --frozen-lockfile
+
       - run: pnpm -r --filter @apilot/codegen... build
-      - name: Generated Dart compiles, passes analyze, and round-trips JSON
+
+      - name: Generated Dart compiles + round-trips
         run: node scripts/verify-dart-codegen.mjs
