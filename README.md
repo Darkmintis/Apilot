@@ -87,6 +87,23 @@ When the editor is open, the MCP server forwards calls to the extension over a l
   .local/              # machine-local state, gitignored
 ```
 
+## Install the extension
+
+```bash
+pnpm --filter apilot package
+cursor --install-extension packages/extension/apilot-0.1.0.vsix
+# or: code --install-extension packages/extension/apilot-0.1.0.vsix
+```
+
+## Publish npm packages
+
+Requires npm login with rights to the `@apilot` scope:
+
+```bash
+pnpm build
+pnpm publish:packages   # @apilot/core, skill, codegen, mcp, cli (dependency order)
+```
+
 ## Development
 
 ```bash
@@ -100,6 +117,8 @@ node scripts/verify-dart-codegen.mjs          # generated Dart compiles + round-
 pnpm --filter apilot test                     # integration tests in real VS Code
 pnpm --filter apilot package                  # build the .vsix
 ```
+
+Personal notes, plans, and local install scripts live in **`.local/`** (gitignored — never published). Per-project Apilot runtime state is under **`.apilot/.local/`**.
 
 ## License
 

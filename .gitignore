@@ -11,3 +11,17 @@ dist/
 *.vsix
 .pnpm-store/
 graphify-out/
+
+# Dart / Flutter tooling (never publish)
+**/.dart_tool/
+**/pubspec.lock
+
+# Env / secrets / editor leftovers
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+.DS_Store
+*.log
