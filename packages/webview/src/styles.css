@@ -10,6 +10,12 @@
   --input-bg: var(--vscode-input-background, #3c3c3c);
   --input-fg: var(--vscode-input-foreground, var(--fg));
   --input-border: var(--vscode-input-border, var(--vscode-dropdown-border, transparent));
+  /* Native <select> popups ignore most CSS; color-scheme + dropdown tokens keep them on-theme. */
+  --dropdown-bg: var(--vscode-dropdown-background, var(--input-bg));
+  --dropdown-fg: var(--vscode-dropdown-foreground, var(--input-fg));
+  --dropdown-border: var(--vscode-dropdown-border, var(--input-border));
+  --dropdown-list: var(--vscode-dropdown-listBackground, var(--dropdown-bg));
+  color-scheme: dark;
   --focus: var(--vscode-focusBorder, #007fd4);
   --btn: var(--vscode-button-background, #0e639c);
   --btn-fg: var(--vscode-button-foreground, #fff);
@@ -40,7 +46,10 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
-body { color: var(--fg); background: var(--bg); font-family: var(--vscode-font-family, system-ui, sans-serif); font-size: var(--vscode-font-size, 13px); line-height: 1.4; }
+body { color: var(--fg); background: var(--bg); font-family: var(--vscode-font-family, system-ui, sans-serif); font-size: var(--vscode-font-size, 13px); line-height: 1.4; color-scheme: dark; }
+body.vscode-light,
+body.vscode-high-contrast-light { color-scheme: light; }
+body.vscode-light { --dropdown-bg: var(--vscode-dropdown-background, #fff); --dropdown-fg: var(--vscode-dropdown-foreground, #333); --dropdown-list: var(--vscode-dropdown-listBackground, #fff); }
 h1 { font-size: 1.55em; font-weight: 600; margin: 0 0 2px; letter-spacing: -0.01em; }
 h2 { font-size: 1.05em; font-weight: 600; margin: 0 0 8px; }
 h3 { font-size: 1em; font-weight: 600; margin: 14px 0 6px; }
@@ -73,7 +82,14 @@ input, select, textarea {
   border-radius: var(--radius); padding: 4px 7px; font: inherit; min-width: 0; min-height: 26px;
 }
 input::placeholder, textarea::placeholder { color: var(--vscode-input-placeholderForeground, var(--muted)); }
-select { padding: 3px 5px; cursor: pointer; }
+select {
+  padding: 3px 5px; cursor: pointer;
+  background-color: var(--dropdown-bg); color: var(--dropdown-fg); border-color: var(--dropdown-border);
+  color-scheme: inherit;
+}
+select option, select optgroup {
+  background-color: var(--dropdown-list); color: var(--dropdown-fg);
+}
 textarea { width: 100%; resize: vertical; line-height: 1.5; padding: 8px 10px; }
 input:focus, select:focus, textarea:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
 input[type="radio"] { min-height: 0; accent-color: var(--btn); }
