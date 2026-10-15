@@ -1,0 +1,75 @@
+name: Release
+
+# Push a version tag to build the .vsix and publish a GitHub Release.
+#   git tag v0.1.0 && git push origin v0.1.0
+# Tag must match packages/extension/package.json "version".
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build .vsix + GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Check tag matches extension version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./packages/extension/package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag v$TAG does not match packages/extension/package.json version $PKG"
+            exit 1
+          fi
+          echo "Releasing Apilot v$PKG"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: |
+          pnpm -r --filter "./packages/*" --filter "!apilot" --filter "!apilot-webview" build
+          pnpm --filter apilot-webview build
+          pnpm --filter apilot compile
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: MCP verify
+        run: |
+          node scripts/verify-mcp.js
+          node scripts/verify-mcp.js packages/extension/dist/mcp.mjs
+
+      - name: Extension integration tests
+        run: xvfb-run -a pnpm --filter apilot test
+
+      - name: Package .vsix
+        run: pnpm --filter apilot package
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p "require('./packages/extension/package.json').version")"
+          VSIX="packages/extension/apilot-${VERSION}.vsix"
+          test -f "$VSIX"
+          gh release create "v${VERSION}" "$VSIX" \
+            --title "Apilot v${VERSION}" \
+            --generate-notes \
+            --verify-tag

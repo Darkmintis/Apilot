@@ -89,10 +89,18 @@ When the editor is open, the MCP server forwards calls to the extension over a l
 
 ## Install the extension
 
+Download the latest `.vsix` from [GitHub Releases](https://github.com/Darkmintis/Apilot/releases), then:
+
 ```bash
-pnpm --filter apilot package
-cursor --install-extension packages/extension/apilot-0.1.0.vsix
-# or: code --install-extension packages/extension/apilot-0.1.0.vsix
+cursor --install-extension apilot-0.1.0.vsix
+# or: code --install-extension apilot-0.1.0.vsix
+```
+
+To cut a release yourself: bump `packages/extension/package.json` version, commit, then:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0   # Release workflow builds the .vsix and attaches it
 ```
 
 ## Publish npm packages
