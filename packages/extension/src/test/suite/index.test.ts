@@ -17,7 +17,7 @@ async function waitFor<T>(fn: () => T | false | undefined | "", ms = 10000): Pro
 
 suite("Apilot extension", () => {
   suiteSetup(async () => {
-    await vscode.extensions.getExtension("apilot-dev.apilot")!.activate();
+    await vscode.extensions.getExtension("Darkmintis.apilot")!.activate();
   });
 
   test("registers its commands", async () => {

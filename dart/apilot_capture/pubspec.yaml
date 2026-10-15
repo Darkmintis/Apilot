@@ -3,7 +3,7 @@ description: >
   A Dio interceptor plugin for Apilot — captures API traffic into
   .apilot/snapshots/ with automatic secret redaction.
 version: 0.1.0
-homepage: https://github.com/apilot-dev/apilot
+homepage: https://github.com/Darkmintis/Apilot
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
