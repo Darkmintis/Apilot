@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
-    "clean": "pnpm -r clean && pnpm store prune"
+    "clean": "pnpm -r clean && pnpm store prune",
+    "publish:packages": "pnpm -r --filter '@apilot/*' publish --access public --no-git-checks"
   },
   "engines": {
     "node": ">=20",
