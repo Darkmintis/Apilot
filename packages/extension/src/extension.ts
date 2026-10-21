@@ -5,6 +5,10 @@
  * through the same Workspace + tool table the AI uses, so the AI can do
  * whatever the user can (except see or enter secret values).
  *
+ * A workspace can hold several Apilot projects — the folder itself, and any
+ * nested folder with an `.apilot/apilot.yaml`. All of them are discovered and
+ * shown, each addressed by its own project id.
+ *
  * On open, with no "connect" step:
  *  - AI skills are written to the project (.cursor/skills, .claude/skills, Copilot instructions)
  *  - the MCP server is registered through the editor's API
@@ -17,14 +21,43 @@ import * as http from "node:http";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Workspace, type DiffResult, type RunOutcome, type SecretProvider } from "@apilot/core";
+import {
+  ProjectHub,
+  Workspace,
+  discoverProjects,
+  type DiffResult,
+  type ProjectEntry,
+  type RunOutcome,
+  type SecretProvider,
+} from "@apilot/core";
 import { callTool } from "@apilot/mcp/tools";
 import { aiFiles, writeAiFiles, MARKER } from "@apilot/skill";
 
 let ext: ApilotExtension | undefined;
 
-export function activate(ctx: vscode.ExtensionContext): void {
+/** A row in the sidebar tree. */
+export interface TreeRow {
+  kind: "project" | "collection" | "endpoint";
+  label: string;
+  id?: string;
+  project?: string;
+}
+
+/** What the extension exposes to other extensions and to its own tests. */
+export interface ApilotApi {
+  /** Every Apilot project found in the workspace. */
+  projects(): { id: string; name: string; root: string; hasApilot: boolean }[];
+  /** The rows the sidebar shows at the top level. */
+  topLevel(): TreeRow[];
+}
+
+export function activate(ctx: vscode.ExtensionContext): ApilotApi {
   ext = new ApilotExtension(ctx);
+  return {
+    projects: () =>
+      ext!.hub.projects.map((p) => ({ id: p.id, name: p.name, root: p.root, hasApilot: p.hasApilot })),
+    topLevel: () => ext!.topLevel(),
+  };
 }
 
 export function deactivate(): void {
@@ -58,19 +91,29 @@ class KeychainSecrets implements SecretProvider {
   }
 }
 
+interface Health {
+  status?: number;
+  state: "none" | "passed" | "failed" | "breaking" | "changed";
+}
+
 class ApilotExtension implements vscode.Disposable {
-  readonly root: string | undefined;
-  readonly ws: Workspace | undefined;
+  /** Every Apilot project found inside the workspace folders. */
+  readonly hub: ProjectHub;
   private panel: vscode.WebviewPanel | undefined;
   private bridge: http.Server | undefined;
   private mcpRegistration: vscode.Disposable | undefined;
   private readonly tree = new EndpointTree(this);
   private readonly disposables: vscode.Disposable[] = [];
   private refreshTimer: NodeJS.Timeout | undefined;
+  private watchers: vscode.Disposable[] = [];
 
   constructor(private readonly ctx: vscode.ExtensionContext) {
-    this.root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    this.ws = this.root ? new Workspace(this.root, { secrets: new KeychainSecrets(ctx.secrets, this.root), timeout: this.config<number>("timeout") }) : undefined;
+    this.hub = new ProjectHub([], {
+      makeWorkspace: (root) =>
+        new Workspace(root, { secrets: new KeychainSecrets(ctx.secrets, root), timeout: this.config<number>("timeout") }),
+    });
+    this.rediscover();
+    this.watchProjects();
 
     const treeView = vscode.window.createTreeView("apilot.endpoints", { treeDataProvider: this.tree, showCollapseAll: true });
     const cmd = (id: string, fn: (...a: any[]) => unknown) => vscode.commands.registerCommand(id, async (...a: any[]) => {
@@ -83,30 +126,31 @@ class ApilotExtension implements vscode.Disposable {
 
     this.disposables.push(
       treeView,
-      cmd("apilot.open", (id?: string) => this.openPanel(typeof id === "string" ? { endpointId: id } : undefined)),
-      cmd("apilot.init", () => this.init()),
+      cmd("apilot.open", (arg?: string | EndpointItem) => {
+        if (arg && typeof arg === "object") return this.openPanel({ endpointId: arg.endpointId, project: arg.project.id });
+        if (typeof arg === "string") return this.openPanel({ endpointId: arg });
+        return this.openPanel();
+      }),
+      cmd("apilot.init", (projectId?: string) => this.init(projectId)),
       cmd("apilot.newEndpoint", () => this.openPanel({ view: "new" })),
       cmd("apilot.import", () => this.openPanel({ view: "import" })),
       cmd("apilot.environments", () => this.openPanel({ view: "environments" })),
       cmd("apilot.runAll", () => this.openPanel({ view: "runAll", autorun: true })),
-      cmd("apilot.runEndpoint", (item?: EndpointItem | string) => this.runFromTree(typeof item === "string" ? item : item?.endpointId)),
-      cmd("apilot.openFile", (item?: EndpointItem) => item?.file && this.openFile(item.file)),
+      cmd("apilot.runEndpoint", (item?: EndpointItem | string) => this.runFromTree(item)),
+      cmd("apilot.openFile", (item?: EndpointItem) => item && this.openFile(item.file, undefined, item.project.id)),
       cmd("apilot.refresh", () => this.refresh()),
       cmd("apilot.setupAi", () => this.setupAi(true)),
       cmd("apilot.removeAi", () => this.removeAi()),
       vscode.workspace.onDidSaveTextDocument((doc) => this.onSave(doc)),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        this.rediscover();
+        this.watchProjects();
+        this.refresh();
+      }),
       vscode.window.registerWebviewPanelSerializer("apilot.panel", {
         deserializeWebviewPanel: async (panel) => this.attachPanel(panel),
       })
     );
-
-    if (this.root) {
-      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(this.root, ".apilot/**"));
-      const onChange = (uri: vscode.Uri) => {
-        if (!uri.fsPath.includes(`${path.sep}.local${path.sep}`)) this.scheduleRefresh();
-      };
-      this.disposables.push(watcher, watcher.onDidCreate(onChange), watcher.onDidChange(onChange), watcher.onDidDelete(onChange));
-    }
 
     this.onProjectReady();
   }
@@ -115,28 +159,105 @@ class ApilotExtension implements vscode.Disposable {
     return vscode.workspace.getConfiguration("apilot").get<T>(key);
   }
 
-  get hasProject(): boolean {
-    return !!this.ws?.exists();
+  /** Every workspace folder open in the editor. */
+  get folders(): string[] {
+    return (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
   }
 
-  get env(): string | undefined {
-    return this.ctx.workspaceState.get<string>("apilot.env");
+  get hasProject(): boolean {
+    return this.hub.exists();
+  }
+
+  /** The folder the bridge and the skills live in. */
+  get bridgeRoot(): string | undefined {
+    return this.folders[0];
+  }
+
+  /** Re-scan the workspace folders for Apilot projects. */
+  rediscover(): void {
+    this.hub.setProjects(discoverProjects(this.folders));
+  }
+
+  /**
+   * Watch every `.apilot` folder in the workspace. A folder appearing or
+   * disappearing changes the project list, so it triggers a re-scan.
+   */
+  private watchProjects(): void {
+    for (const w of this.watchers) w.dispose();
+    this.watchers = [];
+    for (const folder of this.folders) {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(folder), "**/.apilot/**"));
+      const onChange = (uri: vscode.Uri) => {
+        if (uri.fsPath.includes(`${path.sep}.local${path.sep}`)) return;
+        if (uri.fsPath.endsWith(`${path.sep}apilot.yaml`)) this.rediscover();
+        this.scheduleRefresh();
+      };
+      watcher.onDidCreate(onChange);
+      watcher.onDidChange(onChange);
+      watcher.onDidDelete(onChange);
+      this.watchers.push(watcher);
+    }
+  }
+
+  /** The project the panel is showing. */
+  activeProject(): ProjectEntry {
+    const stored = this.ctx.workspaceState.get<string>("apilot.activeProject");
+    if (stored) {
+      try {
+        return this.hub.project(stored);
+      } catch {
+        /* the folder went away — fall back */
+      }
+    }
+    return this.hub.defaultProject();
+  }
+
+  /** The environment selected for a project. */
+  envFor(projectId: string): string | undefined {
+    const map = this.ctx.workspaceState.get<Record<string, string>>("apilot.env") ?? {};
+    const stored = map[projectId];
+    if (stored) {
+      try {
+        const names = this.hub.workspace(projectId).registry().environments.map((e) => e.name);
+        if (names.includes(stored)) return stored;
+      } catch {
+        /* fall through */
+      }
+    }
+    const reg = this.hub.workspace(projectId).registry();
+    return reg.project.defaultEnvironment ?? reg.environments[0]?.name;
+  }
+
+  private async setEnv(projectId: string, env: string): Promise<void> {
+    const map = this.ctx.workspaceState.get<Record<string, string>>("apilot.env") ?? {};
+    map[projectId] = env;
+    await this.ctx.workspaceState.update("apilot.env", map);
   }
 
   /** Called on activation and after `init`: everything that needs a project. */
   private onProjectReady(): void {
     vscode.commands.executeCommand("setContext", "apilot.hasProject", this.hasProject);
-    if (!this.hasProject || !this.root) return;
-    ensureLocalIgnored(this.root);
+    if (!this.hasProject || !this.bridgeRoot) return;
+    ensureLocalIgnored(this.bridgeRoot);
+    for (const p of this.hub.projects) if (p.hasApilot) ensureLocalIgnored(p.root);
     this.startBridge().catch((err) => console.error("[apilot] bridge failed", err));
     if (this.config<boolean>("ai.autoSetup") !== false && !this.ctx.workspaceState.get("apilot.aiRemoved")) this.setupAi(false);
   }
 
-  private async init(): Promise<void> {
-    if (!this.ws) throw new Error("Open a folder first.");
-    const name = await vscode.window.showInputBox({ title: "Apilot — new project", prompt: "Project name", value: path.basename(this.root!) });
+  private async init(projectId?: string): Promise<void> {
+    if (!this.folders.length) throw new Error("Open a folder first.");
+    const project = projectId
+      ? this.hub.project(projectId)
+      : this.hub.projects.find((p) => !p.hasApilot) ?? this.hub.defaultProject();
+    const name = await vscode.window.showInputBox({
+      title: "Apilot — new project",
+      prompt: `Initialize Apilot in "${project.root}"`,
+      value: path.basename(project.root),
+    });
     if (name === undefined) return;
-    this.ws.init(name || "my-api");
+    this.hub.initProject(name || "my-api", project.id);
+    this.rediscover();
+    await this.ctx.workspaceState.update("apilot.activeProject", project.id);
     this.onProjectReady();
     this.refresh();
     this.openPanel();
@@ -147,8 +268,9 @@ class ApilotExtension implements vscode.Disposable {
   // -------------------------------------------------------------------------
 
   private setupAi(manual: boolean): void {
-    if (!this.root) return;
-    const written = writeAiFiles(this.root);
+    const root = this.bridgeRoot;
+    if (!root) return;
+    const written = writeAiFiles(root);
     const how = this.registerMcp();
     if (manual) this.ctx.workspaceState.update("apilot.aiRemoved", undefined);
     if (manual || (written.length && !this.ctx.workspaceState.get("apilot.aiNotified"))) {
@@ -162,9 +284,10 @@ class ApilotExtension implements vscode.Disposable {
   }
 
   private removeAi(): void {
-    if (!this.root) return;
+    const root = this.bridgeRoot;
+    if (!root) return;
     for (const f of aiFiles()) {
-      const full = path.join(this.root, f.path);
+      const full = path.join(root, f.path);
       try {
         if (fs.readFileSync(full, "utf-8").includes(MARKER)) fs.rmSync(full);
       } catch {
@@ -178,11 +301,12 @@ class ApilotExtension implements vscode.Disposable {
   }
 
   private registerMcp(): "Cursor" | "VS Code" | "none" {
-    if (this.mcpRegistration || !this.root) return this.mcpRegistration ? (vscode.env.appName.includes("Cursor") ? "Cursor" : "VS Code") : "none";
+    const root = this.bridgeRoot;
+    if (this.mcpRegistration || !root) return this.mcpRegistration ? (vscode.env.appName.includes("Cursor") ? "Cursor" : "VS Code") : "none";
     const server = {
       command: process.execPath,
       args: [this.ctx.asAbsolutePath(path.join("dist", "mcp.mjs"))],
-      env: { ELECTRON_RUN_AS_NODE: "1", APILOT_PROJECT_ROOT: this.root },
+      env: { ELECTRON_RUN_AS_NODE: "1", APILOT_PROJECT_ROOT: root },
     };
     const api = vscode as any;
     try {
@@ -213,7 +337,8 @@ class ApilotExtension implements vscode.Disposable {
   // -------------------------------------------------------------------------
 
   private async startBridge(): Promise<void> {
-    if (this.bridge || !this.root) return;
+    const root = this.bridgeRoot;
+    if (this.bridge || !root) return;
     const token = crypto.randomBytes(32).toString("hex");
     const server = http.createServer((req, res) => {
       const reply = (status: number, body: unknown) => {
@@ -242,16 +367,20 @@ class ApilotExtension implements vscode.Disposable {
     });
     await new Promise<void>((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
     this.bridge = server;
-    const file = path.join(this.root, ".apilot", ".local", "bridge.json");
+    const file = path.join(root, ".apilot", ".local", "bridge.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ port: (server.address() as { port: number }).port, token, pid: process.pid }), { mode: 0o600 });
   }
 
   /** Run a tool (from the AI via the bridge, or the panel) and keep the GUI in sync. */
   private async tool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    const ws = this.requireWs();
-    if (name.startsWith("run_") && !args.env && this.env) args = { ...args, env: this.env };
-    const result = await callTool(ws, name, args);
+    if (name.startsWith("run_") && !args.env) {
+      const projectId = args.project as string | undefined;
+      const project = projectId ? this.hub.project(projectId) : this.hub.defaultProject();
+      const env = this.envFor(project.id);
+      if (env) args = { ...args, env };
+    }
+    const result = await callTool(this.hub, name, args);
     if (name === "run_endpoint") {
       const r = result as { endpointId: string; diffAgainstBaseline?: { breaking: boolean; summary: DiffResult["summary"] } };
       if (r.diffAgainstBaseline?.breaking) this.alertBreaking(r.endpointId, r.diffAgainstBaseline.summary.breaking);
@@ -272,17 +401,21 @@ class ApilotExtension implements vscode.Disposable {
     vscode.window.showWarningMessage(msg, "Show Changes", "Accept as Baseline").then((pick) => {
       if (pick === "Show Changes") this.openPanel({ endpointId, tab: "changes" });
       if (pick === "Accept as Baseline") {
-        this.requireWs().setBaseline(endpointId);
+        const { ws, endpointId: eid } = this.hub.resolveEndpoint(endpointId);
+        ws.setBaseline(eid);
         this.scheduleRefresh();
       }
     });
   }
 
-  private async runFromTree(endpointId?: string): Promise<void> {
+  private async runFromTree(item?: EndpointItem | string): Promise<void> {
+    const endpointId = typeof item === "string" ? item : item?.endpointId;
+    const projectId = typeof item === "string" ? undefined : item?.project.id;
     if (!endpointId) return;
-    const r = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: `Apilot: running ${endpointId}` }, () =>
-      this.tool("run_endpoint", { endpointId })
-    ) as { status: number; timeMs: number; passed: boolean; diffAgainstBaseline?: { breaking: boolean } };
+    const r = (await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: `Apilot: running ${endpointId}` },
+      () => this.tool("run_endpoint", projectId ? { endpointId, project: projectId } : { endpointId })
+    )) as { status: number; timeMs: number; passed: boolean; diffAgainstBaseline?: { breaking: boolean } };
     if (!r.diffAgainstBaseline?.breaking) {
       vscode.window.setStatusBarMessage(`$(${r.passed ? "pass" : "error"}) ${endpointId} → ${r.status} (${r.timeMs} ms)`, 5000);
     }
@@ -330,49 +463,81 @@ class ApilotExtension implements vscode.Disposable {
   /** Requests from the panel. Tool names map 1:1 to the AI's MCP tools. */
   private async handle(method: string, a: any): Promise<unknown> {
     if (method.startsWith("tool:")) return this.tool(method.slice(5), a);
-    const ws = this.requireWs(method === "state" || method === "init");
+    this.requireWs(method === "state" || method === "init");
     switch (method) {
       case "state":
         return this.state();
       case "init":
-        return this.init();
+        return this.init(a.project);
       case "setEnv":
-        await this.ctx.workspaceState.update("apilot.env", a.env);
+        await this.setEnv(a.project ?? this.activeProject().id, a.env);
         this.tree.refresh();
         return null;
       case "endpoint": {
-        const { entry, definition } = ws.endpoint(a.id);
-        const snapshots = ws.snapshots(a.id);
-        return { id: a.id, file: entry.file, collectionId: entry.collectionId, definition, snapshots, revisions: ws.revisions(a.id), latest: ws.store.latest(a.id) ?? null };
+        const { project, ws: workspace, endpointId } = this.hub.resolveEndpoint(a.id, a.project);
+        const { entry, definition } = workspace.endpoint(endpointId);
+        return {
+          id: endpointId,
+          project: project.id,
+          file: entry.file,
+          collectionId: entry.collectionId,
+          definition,
+          snapshots: workspace.snapshots(endpointId),
+          revisions: workspace.revisions(endpointId),
+          latest: workspace.store.latest(endpointId) ?? null,
+        };
       }
       case "save": {
-        const r = ws.saveEndpoint(a);
+        const { project: _ignored, ...rest } = a;
+        const r = rest.id
+          ? (() => {
+              const { ws: workspace, endpointId } = this.hub.resolveEndpoint(rest.id, a.project);
+              return workspace.saveEndpoint({ ...rest, id: endpointId });
+            })()
+          : this.hub.ensureProject(a.project).saveEndpoint(rest);
         this.scheduleRefresh();
         return r;
       }
       case "run": {
-        const r: RunOutcome = await ws.run(a.id, a.env ?? this.env);
-        if (r.diff?.breaking) this.alertBreaking(a.id, r.diff.summary.breaking);
+        const { project, ws: workspace, endpointId } = this.hub.resolveEndpoint(a.id, a.project);
+        const r: RunOutcome = await workspace.run(endpointId, a.env ?? this.envFor(project.id));
+        if (r.diff?.breaking) this.alertBreaking(endpointId, r.diff.summary.breaking);
         this.scheduleRefresh();
         return r;
       }
       case "snapshotPair": {
-        const diff = ws.diff(a.id, a.from, a.to);
-        return { diff, from: ws.snapshot(a.id, diff.fromId), to: ws.snapshot(a.id, diff.toId), impact: ws.impact(a.id, diff) };
+        const { project, ws: workspace, endpointId } = this.hub.resolveEndpoint(a.id, a.project);
+        const diff = workspace.diff(endpointId, a.from, a.to);
+        return {
+          diff,
+          from: workspace.snapshot(endpointId, diff.fromId),
+          to: workspace.snapshot(endpointId, diff.toId),
+          impact: workspace.impact(endpointId, diff),
+          project: project.id,
+        };
       }
-      case "snapshot":
-        return ws.snapshot(a.id, a.snapshotId);
-      case "schema":
-        return ws.schema(a.id);
+      case "snapshot": {
+        const { ws: workspace, endpointId } = this.hub.resolveEndpoint(a.id, a.project);
+        return workspace.snapshot(endpointId, a.snapshotId);
+      }
+      case "schema": {
+        const { ws: workspace, endpointId } = this.hub.resolveEndpoint(a.id, a.project);
+        return workspace.schema(endpointId);
+      }
       case "variables": {
-        const env = ws.envName(a.env ?? this.env);
-        return { env, variables: await ws.variables(env) };
+        const project = a.project ? this.hub.project(a.project) : this.activeProject();
+        const env = a.env ?? this.envFor(project.id);
+        const name = env ?? this.hub.workspace(project.id).envName();
+        return { env: name, project: project.id, variables: await this.hub.workspace(project.id).variables(name) };
       }
-      case "setSecret":
-        await ws.setVariable(ws.envName(a.env), a.name, "secret", a.value);
+      case "setSecret": {
+        const project = a.project ? this.hub.project(a.project) : this.activeProject();
+        const env = a.env ?? this.envFor(project.id) ?? this.hub.workspace(project.id).envName();
+        await this.hub.workspace(project.id).setVariable(env, a.name, "secret", a.value);
         return null;
+      }
       case "openFile":
-        return this.openFile(a.file, a.line);
+        return this.openFile(a.file, a.line, a.project);
       case "nativeDiff":
         return this.nativeDiff(a);
       case "setupAi":
@@ -385,25 +550,46 @@ class ApilotExtension implements vscode.Disposable {
   }
 
   private state() {
-    const ws = this.ws;
-    if (!ws || !this.hasProject) return { hasProject: false, hasFolder: !!ws };
-    const reg = ws.registry();
-    const env = this.env && reg.environments.some((e) => e.name === this.env) ? this.env : reg.project.defaultEnvironment ?? reg.environments[0]?.name;
+    const projects = this.hub.projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      root: p.root,
+      relPath: p.relPath,
+      hasApilot: p.hasApilot,
+    }));
+    if (!this.hasProject) return { hasProject: false, hasFolder: this.folders.length > 0, projects };
+
+    const active = this.activeProject();
+    const reg = this.hub.workspace(active.id).registry();
+    const endpoints = this.hub.listEndpoints().map(({ project, endpoint }) => ({
+      ...endpoint,
+      project: project.id,
+      health: this.health(project.id, endpoint.id),
+    }));
+    const projectEnvs: Record<string, { env?: string; environments: string[] }> = {};
+    for (const p of this.hub.projects) {
+      if (!p.hasApilot) continue;
+      const names = this.hub.workspace(p.id).registry().environments.map((e) => e.name);
+      projectEnvs[p.id] = { env: this.envFor(p.id), environments: names };
+    }
     return {
       hasProject: true,
       hasFolder: true,
+      projects,
+      activeProject: active.id,
       project: reg.project,
-      env,
+      env: this.envFor(active.id),
       environments: reg.environments.map((e) => e.name),
+      projectEnvs,
       collections: reg.collections,
-      endpoints: reg.endpoints.map((e) => ({ ...e, health: this.health(e.id) })),
+      endpoints,
     };
   }
 
   /** Status dot for an endpoint: last run result and whether it drifted from the baseline. */
-  health(id: string): { status?: number; state: "none" | "passed" | "failed" | "breaking" | "changed" } {
-    const ws = this.requireWs();
+  health(projectId: string, id: string): Health {
     try {
+      const ws = this.hub.workspace(projectId);
       const latest = ws.store.list(id)[0];
       if (!latest) return { state: "none" };
       if (!latest.passed) return { status: latest.status, state: "failed" };
@@ -415,8 +601,44 @@ class ApilotExtension implements vscode.Disposable {
     }
   }
 
-  private async openFile(file: string, line?: number): Promise<void> {
-    const uri = vscode.Uri.file(path.isAbsolute(file) ? file : path.join(this.root!, file));
+  /**
+   * What the sidebar shows at the top level. With one project that is its
+   * collections; with several it is one row per project.
+   */
+  topLevel(): TreeRow[] {
+    const projects = this.hub.projects;
+    if (!projects.length) return [];
+    if (projects.length === 1) {
+      return this.childrenOf(projects[0]!).map((item) =>
+        item instanceof CollectionItem
+          ? { kind: "collection", label: String(item.label), id: item.collectionId, project: projects[0]!.id }
+          : { kind: "endpoint", label: String(item.label), id: (item as EndpointItem).endpointId, project: projects[0]!.id }
+      );
+    }
+    return projects.map((p) => ({ kind: "project", label: p.name, id: p.id }));
+  }
+
+  /** Collections and endpoints of one project, for the sidebar tree. */
+  childrenOf(project: ProjectEntry, parent?: CollectionItem): vscode.TreeItem[] {
+    if (!project.hasApilot) return [];
+    const reg = this.hub.workspace(project.id).registry();
+    const parentId = parent?.collectionId ?? "";
+    const collections = reg.collections
+      .filter((c) =>
+        parentId
+          ? c.id.startsWith(`${parentId}/`) && !c.id.slice(parentId.length + 1).includes("/")
+          : !c.id.includes("/")
+      )
+      .map((c) => new CollectionItem(project, c.id, c.name));
+    const endpoints = reg.endpoints
+      .filter((e) => e.collectionId === parentId)
+      .map((e) => new EndpointItem(project, e.id, e.file, e.name, e.method, e.url, this.health(project.id, e.id)));
+    return [...collections, ...endpoints];
+  }
+
+  private async openFile(file: string, line?: number, projectId?: string): Promise<void> {
+    const base = projectId ? this.hub.project(projectId).root : this.hub.defaultProject().root;
+    const uri = vscode.Uri.file(path.isAbsolute(file) ? file : path.join(base, file));
     const doc = await vscode.window.showTextDocument(uri, { viewColumn: vscode.ViewColumn.Beside, preview: true });
     if (line) {
       const pos = new vscode.Position(Math.max(0, line - 1), 0);
@@ -426,8 +648,8 @@ class ApilotExtension implements vscode.Disposable {
   }
 
   /** Open two snapshots or two revisions in the editor's built-in diff view. */
-  private async nativeDiff(a: { kind: "snapshot" | "revision"; id: string; from: string | number; to: string | number }): Promise<void> {
-    const ws = this.requireWs();
+  private async nativeDiff(a: { kind: "snapshot" | "revision"; id: string; from: string | number; to: string | number; project?: string }): Promise<void> {
+    const { ws } = this.hub.resolveEndpoint(a.id, a.project);
     const file = (x: string | number) =>
       a.kind === "snapshot"
         ? ws.store.path(a.id, String(x))
@@ -466,15 +688,18 @@ class ApilotExtension implements vscode.Disposable {
   // -------------------------------------------------------------------------
 
   private onSave(doc: vscode.TextDocument): void {
-    if (!this.ws || !this.root) return;
-    const rel = path.relative(this.root, doc.uri.fsPath).split(path.sep).join("/");
-    if (!rel.startsWith(".apilot/collections/") || !rel.endsWith(".yaml") || rel.endsWith("_folder.yaml")) return;
-    const ep = this.ws.registry().endpoints.find((e) => e.file === rel);
-    if (!ep) return;
-    try {
-      this.ws.recordRevision(ep.id);
-    } catch (err) {
-      vscode.window.showErrorMessage(`Apilot: ${rel} is not a valid endpoint — ${err instanceof Error ? err.message : String(err)}`);
+    for (const p of this.hub.projects) {
+      if (!p.hasApilot) continue;
+      const rel = path.relative(p.root, doc.uri.fsPath).split(path.sep).join("/");
+      if (!rel.startsWith(".apilot/collections/") || !rel.endsWith(".yaml") || rel.endsWith("_folder.yaml")) continue;
+      const ws = this.hub.workspace(p.id);
+      const ep = ws.registry().endpoints.find((e) => e.file === rel);
+      if (!ep) continue;
+      try {
+        ws.recordRevision(ep.id);
+      } catch (err) {
+        vscode.window.showErrorMessage(`Apilot: ${rel} is not a valid endpoint — ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
@@ -490,18 +715,19 @@ class ApilotExtension implements vscode.Disposable {
   }
 
   requireWs(allowNoProject = false): Workspace {
-    if (!this.ws) throw new Error("Open a folder to use Apilot.");
+    if (!this.folders.length) throw new Error("Open a folder to use Apilot.");
     if (!allowNoProject && !this.hasProject) throw new Error("No Apilot project in this folder yet. Run “Apilot: Initialize Project”.");
-    return this.ws;
+    return this.hub.defaultWorkspace();
   }
 
   dispose(): void {
     this.bridge?.close();
-    const bridgeFile = this.root && path.join(this.root, ".apilot", ".local", "bridge.json");
+    const bridgeFile = this.bridgeRoot && path.join(this.bridgeRoot, ".apilot", ".local", "bridge.json");
     try {
       if (bridgeFile && JSON.parse(fs.readFileSync(bridgeFile, "utf8")).pid === process.pid) fs.rmSync(bridgeFile);
     } catch {}
     this.mcpRegistration?.dispose();
+    for (const w of this.watchers) w.dispose();
     this.disposables.forEach((d) => d.dispose());
   }
 }
@@ -513,11 +739,29 @@ function ensureLocalIgnored(root: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Sidebar tree: collections → endpoints, with status icons
+// Sidebar tree: projects → collections → endpoints, with status icons
 // ---------------------------------------------------------------------------
 
+class ProjectItem extends vscode.TreeItem {
+  constructor(readonly project: ProjectEntry) {
+    super(
+      project.name,
+      project.hasApilot ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
+    );
+    this.contextValue = "project";
+    this.iconPath = new vscode.ThemeIcon(project.hasApilot ? "folder-library" : "folder");
+    this.description = project.hasApilot ? project.relPath : "not initialized";
+    this.tooltip = new vscode.MarkdownString(
+      `${project.hasApilot ? "**Apilot project**" : "No Apilot project in this folder yet"}\n\n\`${project.root}\``
+    );
+    if (!project.hasApilot) {
+      this.command = { command: "apilot.init", title: "Initialize Apilot Project", arguments: [project.id] };
+    }
+  }
+}
+
 class CollectionItem extends vscode.TreeItem {
-  constructor(readonly collectionId: string, label: string) {
+  constructor(readonly project: ProjectEntry, readonly collectionId: string, label: string) {
     super(label, vscode.TreeItemCollapsibleState.Expanded);
     this.contextValue = "collection";
     this.iconPath = new vscode.ThemeIcon("folder");
@@ -525,15 +769,23 @@ class CollectionItem extends vscode.TreeItem {
 }
 
 class EndpointItem extends vscode.TreeItem {
-  constructor(readonly endpointId: string, readonly file: string, name: string, method: string, url: string, health: ReturnType<ApilotExtension["health"]>) {
+  constructor(
+    readonly project: ProjectEntry,
+    readonly endpointId: string,
+    readonly file: string,
+    name: string,
+    method: string,
+    url: string,
+    health: Health
+  ) {
     super(name, vscode.TreeItemCollapsibleState.None);
     this.description = `${method}${health.status ? ` · ${health.status}` : ""}`;
-    this.tooltip = new vscode.MarkdownString(`**${method}** \`${url}\`\n\n${endpointId}${health.state === "breaking" ? "\n\n⚠ Breaking changes vs baseline" : ""}`);
+    this.tooltip = new vscode.MarkdownString(`**${method}** \`${url}\`\n\n${project.id} · ${endpointId}${health.state === "breaking" ? "\n\n⚠ Breaking changes vs baseline" : ""}`);
     this.contextValue = "endpoint";
     const icons = { none: ["circle-outline", undefined], passed: ["pass", "testing.iconPassed"], failed: ["error", "testing.iconFailed"], breaking: ["warning", "list.warningForeground"], changed: ["diff", "charts.blue"] } as const;
     const [icon, color] = icons[health.state];
     this.iconPath = new vscode.ThemeIcon(icon, color ? new vscode.ThemeColor(color) : undefined);
-    this.command = { command: "apilot.open", title: "Open", arguments: [endpointId] };
+    this.command = { command: "apilot.open", title: "Open", arguments: [this] };
   }
 }
 
@@ -552,15 +804,15 @@ class EndpointTree implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   getChildren(parent?: vscode.TreeItem): vscode.TreeItem[] {
-    if (!this.ext.hasProject) return []; // welcome view shows Init / Import buttons
-    const reg = this.ext.requireWs().registry();
-    const parentId = parent instanceof CollectionItem ? parent.collectionId : "";
-    const collections = reg.collections
-      .filter((c) => (parentId ? c.id.startsWith(`${parentId}/`) && !c.id.slice(parentId.length + 1).includes("/") : !c.id.includes("/")))
-      .map((c) => new CollectionItem(c.id, c.name));
-    const endpoints = reg.endpoints
-      .filter((e) => e.collectionId === parentId)
-      .map((e) => new EndpointItem(e.id, e.file, e.name, e.method, e.url, this.ext.health(e.id)));
-    return [...collections, ...endpoints];
+    const projects = this.ext.hub.projects;
+    if (!projects.length) return []; // welcome view shows Init / Import buttons
+    // One project: show its collections directly, as before.
+    if (projects.length === 1) {
+      return this.ext.childrenOf(projects[0]!, parent instanceof CollectionItem ? parent : undefined);
+    }
+    if (!parent) return projects.map((p) => new ProjectItem(p));
+    if (parent instanceof ProjectItem) return this.ext.childrenOf(parent.project, undefined);
+    if (parent instanceof CollectionItem) return this.ext.childrenOf(parent.project, parent);
+    return [];
   }
 }
