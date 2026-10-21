@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, act, within } from "@testing-library/react";
 
 const mockState = {
   hasProject: true,
   hasFolder: true,
   project: { name: "My API", defaultEnvironment: "dev" },
+  activeProject: "repo",
+  projects: [{ id: "repo", name: "My API", root: "/repo", relPath: "", hasApilot: true }],
   env: "dev",
   environments: ["dev", "staging"],
+  projectEnvs: { repo: { env: "dev", environments: ["dev", "staging"] } },
   collections: [{ id: "orders", name: "Orders", path: ".apilot/collections/orders" }],
   endpoints: [
-    { id: "orders.list", collectionId: "orders", name: "List orders", method: "GET", url: "{{baseUrl}}/orders", file: ".apilot/collections/orders/list.yaml", health: { state: "passed" as const } },
-    { id: "orders.get", collectionId: "orders", name: "Get order", method: "GET", url: "{{baseUrl}}/orders/{{id}}", file: ".apilot/collections/orders/get.yaml", health: { state: "breaking" as const, status: 500 } },
+    { id: "orders.list", collectionId: "orders", name: "List orders", method: "GET", url: "{{baseUrl}}/orders", file: ".apilot/collections/orders/list.yaml", project: "repo", health: { state: "passed" as const } },
+    { id: "orders.get", collectionId: "orders", name: "Get order", method: "GET", url: "{{baseUrl}}/orders/{{id}}", file: ".apilot/collections/orders/get.yaml", project: "repo", health: { state: "breaking" as const, status: 500 } },
   ],
 };
 
@@ -101,13 +104,13 @@ describe("App", () => {
   it("clicking 'New endpoint' switches to the new-endpoint view", async () => {
     render(<App />);
     await screen.findByText("New endpoint");
-    const overviewBtn = screen.getAllByText("New endpoint")[0];
+    const overviewBtn = screen.getAllByText("New endpoint")[0]!;
     await act(async () => {
       fireEvent.click(overviewBtn);
     });
     await waitFor(() => {
       expect(persisted.set).toHaveBeenCalledWith(
-        expect.objectContaining({ view: { kind: "new" } })
+        expect.objectContaining({ view: { kind: "new", project: "repo" } })
       );
     });
   });
@@ -115,13 +118,13 @@ describe("App", () => {
   it("clicking 'Import' switches to the import view", async () => {
     render(<App />);
     await screen.findByText("Import");
-    const overviewBtn = screen.getAllByText("Import")[0];
+    const overviewBtn = screen.getAllByText("Import")[0]!;
     await act(async () => {
       fireEvent.click(overviewBtn);
     });
     await waitFor(() => {
       expect(persisted.set).toHaveBeenCalledWith(
-        expect.objectContaining({ view: { kind: "import" } })
+        expect.objectContaining({ view: { kind: "import", project: "repo" } })
       );
     });
   });
@@ -135,8 +138,29 @@ describe("App", () => {
     });
     await waitFor(() => {
       expect(persisted.set).toHaveBeenCalledWith(
-        expect.objectContaining({ view: { kind: "endpoint", id: "orders.get", tab: "changes" } })
+        expect.objectContaining({ view: { kind: "endpoint", id: "orders.get", project: "repo", tab: "changes" } })
       );
     });
+  });
+
+  it("lists every project when the workspace holds more than one", async () => {
+    (persisted.get as any).mockReturnValue({ view: { kind: "home" }, navOpen: true });
+    mockCall({
+      ...mockState,
+      activeProject: "services/api",
+      projects: [
+        { id: "repo", name: "Root", root: "/repo", relPath: "", hasApilot: false },
+        { id: "services/api", name: "Service API", root: "/repo/services/api", relPath: "services/api", hasApilot: true },
+      ],
+      projectEnvs: { "services/api": { env: "dev", environments: ["dev"] } },
+      endpoints: [{ ...mockState.endpoints[0]!, project: "services/api" }],
+    });
+    render(<App />);
+    // The nested project is shown by name, and the root folder offers to initialize.
+    await screen.findByRole("heading", { name: "Service API" });
+    const sidebar = document.querySelector(".sidebar")!;
+    expect(within(sidebar).getByText("Service API")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Root")).toBeInTheDocument();
+    expect(within(sidebar).getByText("init")).toBeInTheDocument();
   });
 });

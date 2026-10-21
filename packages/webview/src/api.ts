@@ -52,14 +52,30 @@ export const HEALTH_LABEL: Record<Health["state"], string> = {
   changed: "Changed (safe)",
 };
 
+/** One Apilot project found in the workspace. */
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  root: string;
+  relPath: string;
+  hasApilot: boolean;
+}
+
 export interface AppState {
   hasProject: boolean;
   hasFolder: boolean;
+  /** The active project's apilot.yaml. */
   project?: ApilotProject;
+  /** Id of the project the panel is showing. */
+  activeProject?: string;
+  /** Every project in the workspace, including ones without `.apilot` yet. */
+  projects?: ProjectInfo[];
   env?: string;
   environments?: string[];
+  /** Environment per project — each project has its own environments. */
+  projectEnvs?: Record<string, { env?: string; environments: string[] }>;
   collections?: CollectionEntry[];
-  endpoints?: (EndpointEntry & { health: Health })[];
+  endpoints?: (EndpointEntry & { health: Health; project: string })[];
 }
 
 export const pretty = (v: unknown): string => (typeof v === "string" ? v : v === undefined ? "" : JSON.stringify(v, null, 2));

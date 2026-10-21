@@ -37,8 +37,16 @@ export interface RunView {
 
 const EMPTY: EndpointFile = { name: "", method: "GET", url: "{{baseUrl}}/" };
 
-export function EndpointView(props: { id?: string; env: string; tab?: string; version: number; setView: (v: View) => void; collections?: string[] }) {
-  const { id, env, version, setView } = props;
+export function EndpointView(props: {
+  id?: string;
+  project?: string;
+  env: string;
+  tab?: string;
+  version: number;
+  setView: (v: View) => void;
+  collections?: string[];
+}) {
+  const { id, project, env, version, setView } = props;
   const [detail, setDetail] = useState<Detail | null>(null);
   const [draft, setDraft] = useState<EndpointFile>(EMPTY);
   const [collection, setCollection] = useState(props.collections?.[0] ?? "");
@@ -60,7 +68,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const d = await call<Detail>("endpoint", { id });
+      const d = await call<Detail>("endpoint", { id, project });
       setDetail(d);
       if (!dirtyRef.current) setDraft(d.definition);
       setShown((cur) => (cur && d.snapshots.some((s) => s.id === cur.snapshot.id) ? cur : d.latest ? { snapshot: d.latest } : null));
@@ -68,7 +76,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [id]);
+  }, [id, project]);
 
   useEffect(() => {
     load();
@@ -86,7 +94,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
     }
     setBusy("save");
     try {
-      const r = await call<{ id: string }>("save", { ...clean(draft), id, collection: id ? undefined : collection || undefined });
+      const r = await call<{ id: string }>("save", { ...clean(draft), id, project, collection: id ? undefined : collection || undefined });
       setDirty(false);
       unsaved.current = false;
       setError("");
@@ -106,7 +114,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
     setBusy("run");
     setError("");
     try {
-      const r = await call<{ snapshot: SnapshotRedacted; captured: Record<string, string>; diff?: { changes: unknown[] } }>("run", { id: target, env });
+      const r = await call<{ snapshot: SnapshotRedacted; captured: Record<string, string>; diff?: { changes: unknown[] } }>("run", { id: target, project, env });
       setShown({ snapshot: r.snapshot, captured: r.captured });
       setResTab(r.diff?.changes.length ? "changes" : "response");
     } catch (e) {
@@ -118,7 +126,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
 
   const remove = async () => {
     if (!id || !(await confirm(`Delete “${draft.name || id}”?`, "Delete", `Deletes ${detail?.file ?? "the endpoint file"}.`))) return;
-    await call("tool:delete_endpoint", { endpointId: id });
+    await call("tool:delete_endpoint", { endpointId: id, project });
     unsaved.current = false;
     setView({ kind: "home" });
   };
@@ -169,7 +177,7 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
         <span className="spacer" />
         {detail && (
           <>
-            <button className="icon" title="Open YAML file" aria-label="Open YAML file" onClick={() => call("openFile", { file: detail.file })}>
+            <button className="icon" title="Open YAML file" aria-label="Open YAML file" onClick={() => call("openFile", { file: detail.file, project })}>
               <FileCode2 size={14} />
             </button>
             <button className="icon danger" title="Delete endpoint" aria-label="Delete endpoint" onClick={remove}>
@@ -229,21 +237,22 @@ export function EndpointView(props: { id?: string; env: string; tab?: string; ve
           />
           <div className="tab-body" role="tabpanel">
             {resTab === "response" && <ResponseTab run={shown} />}
-            {resTab === "changes" && <ChangesTab id={id} snapshots={detail.snapshots} version={version} />}
+            {resTab === "changes" && <ChangesTab id={id} project={project} snapshots={detail.snapshots} version={version} />}
             {resTab === "history" && (
               <HistoryTab
                 id={id}
+                project={project}
                 snapshots={detail.snapshots}
                 shownId={shown?.snapshot.id}
                 show={async (sid) => {
-                  setShown({ snapshot: await call("snapshot", { id, snapshotId: sid }) });
+                  setShown({ snapshot: await call("snapshot", { id, project, snapshotId: sid }) });
                   setResTab("response");
                 }}
               />
             )}
-            {resTab === "versions" && <VersionsTab id={id} revisions={detail.revisions} dirty={dirty} />}
-            {resTab === "schema" && <SchemaTab id={id} version={version} />}
-            {resTab === "code" && <CodeTab id={id} version={version} />}
+            {resTab === "versions" && <VersionsTab id={id} project={project} revisions={detail.revisions} dirty={dirty} />}
+            {resTab === "schema" && <SchemaTab id={id} project={project} version={version} />}
+            {resTab === "code" && <CodeTab id={id} project={project} version={version} />}
           </div>
         </>
       )}

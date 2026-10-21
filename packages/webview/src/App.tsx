@@ -8,13 +8,16 @@ import { Spinner } from "./components/ResultTabs";
 
 export type View =
   | { kind: "home" }
-  | { kind: "endpoint"; id: string; tab?: string }
-  | { kind: "new" }
-  | { kind: "import" }
-  | { kind: "environments" }
-  | { kind: "runAll"; autorun?: boolean };
+  | { kind: "endpoint"; id: string; project?: string; tab?: string }
+  | { kind: "new"; project?: string }
+  | { kind: "import"; project?: string }
+  | { kind: "environments"; project?: string }
+  | { kind: "runAll"; project?: string; autorun?: boolean };
 
-const sameView = (a: View, b: View) => a.kind === b.kind && (a.kind !== "endpoint" || a.id === (b as { id: string }).id);
+const sameView = (a: View, b: View) =>
+  a.kind === b.kind &&
+  (a.kind !== "endpoint" ||
+    (a.id === (b as { id: string }).id && (a.project ?? "") === ((b as { project?: string }).project ?? "")));
 
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
@@ -49,23 +52,29 @@ export default function App() {
       onHostMessage((msg) => {
         if (msg.type === "changed") reload();
         if (msg.type === "focus") {
-          if (msg.endpointId) setView({ kind: "endpoint", id: msg.endpointId, tab: msg.tab });
-          else if (msg.view) setView({ kind: msg.view, autorun: msg.autorun } as View);
+          if (msg.endpointId) setView({ kind: "endpoint", id: msg.endpointId, project: msg.project, tab: msg.tab });
+          else if (msg.view) setView({ kind: msg.view, project: msg.project, autorun: msg.autorun } as View);
         }
       }),
     [reload, setView]
   );
 
   if (!state) return <Spinner label="Loading Apilot…" />;
-  if (!state.hasProject) return <WelcomePage hasFolder={state.hasFolder} />;
+  if (!state.hasProject) return <WelcomePage hasFolder={state.hasFolder} projects={state.projects} />;
 
-  const env = state.env!;
-  const changeEnv = (e: string) => call("setEnv", { env: e }).then(reload);
-  const known = view.kind !== "endpoint" || state.endpoints!.some((e) => e.id === view.id);
+  const projects = state.projects ?? [];
+  const activeProject = state.activeProject ?? projects[0]?.id ?? "";
+  /** The project the user is looking at right now. */
+  const viewProject = view.kind !== "home" ? view.project : undefined;
+  const focusProject = viewProject ?? activeProject;
+  const env = state.projectEnvs?.[focusProject]?.env ?? state.env ?? "";
+
+  const changeEnv = (e: string) => call("setEnv", { env: e, project: focusProject }).then(reload);
+  const known = view.kind !== "endpoint" || state.endpoints!.some((e) => e.id === view.id && e.project === (view.project ?? focusProject));
 
   return (
     <div className={`app ${navOpen ? "" : "nav-closed"}`}>
-      {navOpen && <Sidebar state={state} view={view} setView={setView} changeEnv={changeEnv} onCollapse={toggleNav} />}
+      {navOpen && <Sidebar state={state} view={view} setView={setView} changeEnv={changeEnv} onCollapse={toggleNav} project={focusProject} />}
       {navOpen && <div className="scrim" onClick={toggleNav} aria-hidden />}
       <main className="main">
         {!navOpen && (
@@ -73,38 +82,47 @@ export default function App() {
             <PanelLeft size={16} />
           </button>
         )}
-        {view.kind === "endpoint" && known && <EndpointView key={view.id} id={view.id} env={env} tab={view.tab} version={version} setView={setView} />}
-        {view.kind === "new" && <EndpointView key="new" env={env} version={version} setView={setView} collections={state.collections!.map((c) => c.id)} />}
-        {view.kind === "import" && <ImportPage env={env} setView={setView} />}
-        {view.kind === "environments" && <EnvironmentsPage env={env} environments={state.environments!} version={version} changeEnv={changeEnv} />}
-        {view.kind === "runAll" && <RunAllPage env={env} state={state} autorun={view.autorun} setView={setView} />}
-        {(view.kind === "home" || !known) && <Overview state={state} setView={setView} />}
+        {view.kind === "endpoint" && known && (
+          <EndpointView key={`${focusProject}:${view.id}`} id={view.id} project={focusProject} env={env} tab={view.tab} version={version} setView={setView} />
+        )}
+        {view.kind === "new" && (
+          <EndpointView key="new" project={focusProject} env={env} version={version} setView={setView} collections={state.collections!.map((c) => c.id)} />
+        )}
+        {view.kind === "import" && <ImportPage project={focusProject} env={env} setView={setView} />}
+        {view.kind === "environments" && (
+          <EnvironmentsPage project={focusProject} env={env} environments={state.projectEnvs?.[focusProject]?.environments ?? state.environments ?? []} version={version} changeEnv={changeEnv} />
+        )}
+        {view.kind === "runAll" && <RunAllPage project={focusProject} env={env} state={state} autorun={view.autorun} setView={setView} />}
+        {(view.kind === "home" || !known) && <Overview state={state} setView={setView} project={focusProject} />}
       </main>
     </div>
   );
 }
 
-function Overview({ state, setView }: { state: AppState; setView: (v: View) => void }) {
+function Overview({ state, setView, project }: { state: AppState; setView: (v: View) => void; project: string }) {
   const eps = state.endpoints!;
   const count = (s: string) => eps.filter((e) => e.health.state === s).length;
   const attention = eps.filter((e) => e.health.state === "breaking" || e.health.state === "failed" || e.health.state === "changed");
+  const projects = state.projects ?? [];
+  const multi = projects.length > 1;
   return (
     <div className="page">
       <header className="page-head">
         <div>
-          <h1>{state.project!.name}</h1>
+          <h1>{multi ? projects.find((p) => p.id === project)?.name ?? state.project!.name : state.project!.name}</h1>
           <p className="muted">
             {eps.length} endpoint{eps.length === 1 ? "" : "s"} · <span className="chip">{state.env}</span>
+            {multi && <> · <span className="chip">{projects.filter((p) => p.hasApilot).length} projects</span></>}
           </p>
         </div>
         <div className="row gap-s wrap">
-          <button className="primary" onClick={() => setView({ kind: "runAll", autorun: true })} disabled={!eps.length}>
+          <button className="primary" onClick={() => setView({ kind: "runAll", project, autorun: true })} disabled={!eps.length}>
             <Play size={14} /> Run all
           </button>
-          <button onClick={() => setView({ kind: "new" })}>
+          <button onClick={() => setView({ kind: "new", project })}>
             <Plus size={14} /> New endpoint
           </button>
-          <button onClick={() => setView({ kind: "import" })}>
+          <button onClick={() => setView({ kind: "import", project })}>
             <Download size={14} /> Import
           </button>
         </div>
@@ -129,11 +147,12 @@ function Overview({ state, setView }: { state: AppState; setView: (v: View) => v
         ) : (
           <ul className="list">
             {attention.map((e) => (
-              <li key={e.id}>
-                <button className="row-button" onClick={() => setView({ kind: "endpoint", id: e.id, tab: e.health.state === "failed" ? "response" : "changes" })}>
+              <li key={`${e.project}:${e.id}`}>
+                <button className="row-button" onClick={() => setView({ kind: "endpoint", id: e.id, project: e.project, tab: e.health.state === "failed" ? "response" : "changes" })}>
                   <span className={`dot ${e.health.state}`} />
                   <span className={`method m-${e.method}`}>{e.method}</span>
                   <span className="grow ellipsis">{e.name}</span>
+                  {multi && <span className="chip">{e.project}</span>}
                   <span className={`chip ${e.health.state}`}>{e.health.state === "failed" ? `failed${e.health.status ? ` · ${e.health.status}` : ""}` : HEALTH_LABEL[e.health.state]}</span>
                 </button>
               </li>
