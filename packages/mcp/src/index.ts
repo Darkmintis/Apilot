@@ -7,6 +7,9 @@
  * extension, which resolves secrets from the OS keychain and keeps the GUI in
  * sync. Otherwise tools run here, with secrets from APILOT_SECRET_<name>.
  * Either way, the AI only ever sees redacted data.
+ *
+ * A folder can hold several Apilot projects; all of them are discovered, and
+ * every endpoint tool takes an optional `project` to say which one it means.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -14,7 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { Workspace } from "@apilot/core";
+import { ProjectHub } from "@apilot/core";
 import { TOOLS, callTool } from "./tools.js";
 
 function findRoot(): string {
@@ -27,20 +30,32 @@ function findRoot(): string {
 }
 
 const root = findRoot();
-const ws = new Workspace(root);
+const hub = ProjectHub.forRoot(root);
 
 interface Bridge {
   port: number;
   token: string;
 }
 
-async function viaBridge(name: string, args: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false }> {
-  let bridge: Bridge;
-  try {
-    bridge = JSON.parse(readFileSync(join(root, ".apilot", ".local", "bridge.json"), "utf-8")) as Bridge;
-  } catch {
-    return { ok: false };
+/** Find the editor's bridge file — it may live in a parent of this project. */
+function findBridge(): Bridge | undefined {
+  let dir = root;
+  for (;;) {
+    try {
+      const file = join(dir, ".apilot", ".local", "bridge.json");
+      if (existsSync(file)) return JSON.parse(readFileSync(file, "utf-8")) as Bridge;
+    } catch {
+      /* unreadable — keep looking */
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
   }
+}
+
+async function viaBridge(name: string, args: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false }> {
+  const bridge = findBridge();
+  if (!bridge) return { ok: false };
   let res: Response;
   try {
     res = await fetch(`http://127.0.0.1:${bridge.port}/call`, {
@@ -65,7 +80,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const args = (request.params.arguments ?? {}) as Record<string, unknown>;
   try {
     const bridged = await viaBridge(name, args);
-    const result = bridged.ok ? bridged.result : await callTool(ws, name, args);
+    const result = bridged.ok ? bridged.result : await callTool(hub, name, args);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   } catch (err) {
     return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };

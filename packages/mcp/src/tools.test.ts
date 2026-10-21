@@ -1,6 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { stringify as toYaml } from "yaml";
 import { callTool, TOOLS } from "./tools";
-import { schemaToJsonSchema } from "@apilot/core";
+import { ProjectHub, discoverProjects, schemaToJsonSchema } from "@apilot/core";
 import type { Workspace } from "@apilot/core";
 
 /** Minimal mock Workspace — each method is a vi.fn() so tests can assert calls
@@ -463,5 +467,77 @@ describe("callTool — codegen & import", () => {
     const result = await callTool(ws, "get_endpoint", { endpointId: "orders.list" }) as any;
     expect(result.latestResponse.body.truncated).toBe(true);
     expect(result.latestResponse.body.preview).toHaveLength(60_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Several projects in one workspace
+// ---------------------------------------------------------------------------
+
+describe("callTool — multiple projects", () => {
+  const temps: string[] = [];
+
+  /** A workspace root with two nested Apilot projects. */
+  function makeHub() {
+    const root = mkdtempSync(join(tmpdir(), "apilot-multi-"));
+    temps.push(root);
+    for (const [dir, name] of [["services/api", "API"], ["apps/web", "Web"]] as const) {
+      const project = join(root, dir);
+      mkdirSync(join(project, ".apilot", "collections", "orders"), { recursive: true });
+      writeFileSync(join(project, ".apilot", "apilot.yaml"), toYaml({ name, defaultEnvironment: "dev" }));
+      writeFileSync(
+        join(project, ".apilot", "collections", "orders", "list.yaml"),
+        toYaml({ name: "List orders", method: "GET", url: "{{baseUrl}}/orders" })
+      );
+    }
+    return new ProjectHub(discoverProjects([root]));
+  }
+
+  afterEach(() => {
+    for (const t of temps.splice(0)) rmSync(t, { recursive: true, force: true });
+  });
+
+  it("lists every project with its endpoints", async () => {
+    const hub = makeHub();
+    const result = (await callTool(hub, "list_endpoints", {})) as any;
+    const ids = result.projects.filter((p: any) => p.hasApilot).map((p: any) => p.id).sort();
+    expect(ids).toEqual(["apps/web", "services/api"]);
+    expect(result.endpoints).toHaveLength(2);
+    expect(result.endpoints.every((e: any) => !!e.project)).toBe(true);
+  });
+
+  it("resolves an endpoint in the project that owns it", async () => {
+    const hub = makeHub();
+    const result = (await callTool(hub, "get_endpoint", { endpointId: "orders.list", project: "apps/web" })) as any;
+    expect(result.project).toBe("apps/web");
+    expect(result.definition.method).toBe("GET");
+  });
+
+  it("accepts a project-qualified endpoint id", async () => {
+    const hub = makeHub();
+    const result = (await callTool(hub, "get_endpoint", { endpointId: "services/api::orders.list" })) as any;
+    expect(result.project).toBe("services/api");
+  });
+
+  it("says which projects to choose from when an id is ambiguous", async () => {
+    const hub = makeHub();
+    await expect(callTool(hub, "get_endpoint", { endpointId: "orders.list" })).rejects.toThrow(/more than one project/);
+  });
+
+  it("filters endpoints by project", async () => {
+    const hub = makeHub();
+    const result = (await callTool(hub, "list_endpoints", { project: "apps/web" })) as any;
+    expect(result.endpoints).toHaveLength(1);
+    expect(result.endpoints[0].project).toBe("apps/web");
+  });
+
+  it("initializes a folder that has no project yet", async () => {
+    const root = mkdtempSync(join(tmpdir(), "apilot-multi-"));
+    temps.push(root);
+    const hub = new ProjectHub(discoverProjects([root]));
+    expect(hub.exists()).toBe(false);
+    const result = (await callTool(hub, "init_project", { name: "Root API" })) as any;
+    expect(result.initialized).toBe(join(root, ".apilot"));
+    expect(hub.exists()).toBe(true);
   });
 });
