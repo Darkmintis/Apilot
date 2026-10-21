@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import type {
   ApilotProject,
@@ -479,7 +479,7 @@ export class Workspace {
           scanned++;
           readFileSync(full, "utf-8").split("\n").forEach((text, i) => {
             for (const p of patterns) {
-              if (p.re.test(text)) matches.push({ file: relative(this.root, full), line: i + 1, field: p.field, text: text.trim().slice(0, 200) });
+              if (p.re.test(text)) matches.push({ file: relative(this.root, full).split(sep).join("/"), line: i + 1, field: p.field, text: text.trim().slice(0, 200) });
             }
           });
         }
