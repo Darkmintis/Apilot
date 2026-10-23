@@ -10,7 +10,7 @@
     "publish:packages": "pnpm -r --filter '@apilot/*' publish --access public --no-git-checks"
   },
   "engines": {
-    "node": ">=22.13",
+    "node": ">=24",
     "pnpm": ">=11"
   },
   "dependencies": {

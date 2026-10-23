@@ -25,8 +25,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # pnpm 11 needs Node >= 22.13 (uses node:sqlite)
-          node-version: 22
+          # Node 24 is the current LTS. pnpm 11 needs >= 22.13 (node:sqlite).
+          node-version: 24
           cache: pnpm
 
       - name: Install
@@ -82,7 +82,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: dart-lang/setup-dart@v1
