@@ -6,3 +6,6 @@ node_modules/**
 dist/test/**
 **/*.map
 **/*.tsbuildinfo
+*.log
+*.vsix
+.vscode-test/**
