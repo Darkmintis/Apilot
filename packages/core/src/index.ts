@@ -39,3 +39,16 @@ export {
 } from "./workspace.js";
 
 export { importSpec, tokenizeShell, type ImportSource, type ImportResult } from "./importers.js";
+
+export {
+  ProjectHub,
+  discoverProjects,
+  singleProjectContext,
+  isToolContext,
+  type ProjectEntry,
+  type ProjectEndpoint,
+  type ProjectHubOptions,
+  type ResolvedEndpoint,
+  type ToolContext,
+  type DiscoverOptions,
+} from "./projects.js";

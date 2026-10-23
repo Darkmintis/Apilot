@@ -9,6 +9,7 @@ It is not a Postman replacement. It exists to keep your API contract, its histor
 ## Features
 
 - **GUI first.** The Apilot panel has a request editor, response view, **Changes** (split diff of baseline vs latest, with breaking/warning/safe labels and code impact), **History** (every saved response; set any as the baseline), **Versions** (v1, v2, … of the request definition, with diff and restore), **Schema**, **Code**, **Environments**, **Import**, and **Run all**.
+- **Several projects in one workspace.** A folder can hold more than one Apilot project — the folder itself and any nested folder with an `.apilot/apilot.yaml`. All of them are found and shown; the sidebar lists one group per project, and a folder without Apilot still offers to initialize.
 - **Breaking-change detection.** Removed fields, type changes, non-null becoming nullable, and removed enum values are breaking. Added fields are safe.
 - **Lightweight version control for endpoints.** Every save is recorded in `.apilot/history/`, whether it comes from the GUI, a hand edit, or the AI.
 - **Codegen.** Dart (freezed or plain + Dio), TypeScript (zod + fetch), Kotlin (kotlinx + Retrofit), and Swift (Codable). Quicktype-style: identical shapes share one class, array items get singular names, repeated strings become enums with an `unknown` fallback, ISO dates become date types, and id-keyed objects become maps. Files you wrote by hand are never overwritten.
@@ -16,6 +17,28 @@ It is not a Postman replacement. It exists to keep your API contract, its histor
 - **Import** from cURL, Postman v2, or OpenAPI/Swagger.
 - **AI with no setup.** The extension writes skills to `.cursor/skills/`, `.claude/skills/`, and `.github/instructions/`, and registers the MCP server (24 tools) with Cursor or VS Code. There is no "connect" button.
 - **CI.** `apilot check` fails the build on errors or breaking changes.
+
+## Several projects in one workspace
+
+Apilot discovers every `.apilot/apilot.yaml` under the folders you open (4 levels deep, skipping `node_modules`, `build`, `dist`, and other noise folders). Each project keeps its own endpoints, environments, snapshots, and history.
+
+- The **sidebar** shows one group per project. A folder with no Apilot yet is listed with an *init* action.
+- The **panel** keeps track of which project you are in, along with that project's environments and secrets.
+- The **AI** gets the whole picture: `list_endpoints` returns each project with its id, and every endpoint tool takes an optional `project`:
+
+```jsonc
+// ids that are unique in the workspace need no project
+{ "endpointId": "orders.list" }
+
+// ids that exist in two projects do
+{ "endpointId": "orders.list", "project": "services/api" }
+
+// or as one string
+{ "endpointId": "services/api::orders.list" }
+```
+
+If an id exists in more than one project and no `project` is given, Apilot says so instead of guessing.
+
 
 ## Secrets
 
@@ -32,7 +55,7 @@ Snapshots are redacted before they are written. The AI can declare a secret vari
 
 | Package | Description |
 |---|---|
-| `@apilot/core` | File format, `Workspace` (the shared action layer), runner, snapshots, differ, schema, revisions, importers, redaction |
+| `@apilot/core` | File format, `Workspace` (the shared action layer), `ProjectHub` (several projects in one workspace), runner, snapshots, differ, schema, revisions, importers, redaction |
 | `@apilot/codegen` | Model and API-call generators |
 | `@apilot/mcp` | MCP server and tool table, shared with the extension |
 | `@apilot/cli` | `apilot` CLI for CI and scripts |
@@ -56,6 +79,8 @@ apilot import openapi spec.yaml
 apilot check --env dev --markdown "$GITHUB_STEP_SUMMARY"
 apilot setup-ai                   # skills for editors without the extension
 ```
+
+Add `--project <id>` to any command to target one project (for example `apilot run orders.list --project services/api`).
 
 ## MCP without the extension
 
@@ -86,6 +111,8 @@ When the editor is open, the MCP server forwards calls to the extension over a l
   history/             # request versions (v1, v2, …)
   .local/              # machine-local state, gitignored
 ```
+
+Each project has its own `.apilot/` folder. A workspace can hold several of them — one per project — and the extension finds them all.
 
 ## Install the extension
 

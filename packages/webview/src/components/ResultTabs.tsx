@@ -136,10 +136,10 @@ interface Pair {
   impact: { fields: string[]; matches: { file: string; line: number; field: string; text: string }[] };
 }
 
-export function ChangesTab({ id, snapshots, version }: { id: string; snapshots: SnapshotMeta[]; version: number }) {
+export function ChangesTab({ id, project, snapshots, version }: { id: string; project?: string; snapshots: SnapshotMeta[]; version: number }) {
   const [from, setFrom] = useState<string>();
   const [to, setTo] = useState<string>();
-  const { data, error, reload } = useLoad<Pair>(() => call("snapshotPair", { id, from, to }), [id, from, to, version]);
+  const { data, error, reload } = useLoad<Pair>(() => call("snapshotPair", { id, project, from, to }), [id, project, from, to, version]);
 
   if (snapshots.length < 1) return <Empty>No responses yet. Send the request — the first successful response becomes the baseline, and later responses are compared to it.</Empty>;
   if (error) return <Empty>{error}</Empty>;
@@ -160,10 +160,10 @@ export function ChangesTab({ id, snapshots, version }: { id: string; snapshots: 
         <span className="spacer" />
         {!same && (
           <>
-            <button onClick={() => call("nativeDiff", { kind: "snapshot", id, from: diff.fromId, to: diff.toId })}>
+            <button onClick={() => call("nativeDiff", { kind: "snapshot", id, project, from: diff.fromId, to: diff.toId })}>
               <GitCompare size={14} /> Open in editor
             </button>
-            <button className="primary" onClick={() => call("tool:set_baseline", { endpointId: id, snapshotId: diff.toId }).then(() => (setFrom(undefined), setTo(undefined), reload()))}>
+            <button className="primary" onClick={() => call("tool:set_baseline", { endpointId: id, project, snapshotId: diff.toId }).then(() => (setFrom(undefined), setTo(undefined), reload()))}>
               Accept as baseline
             </button>
           </>
@@ -205,7 +205,7 @@ export function ChangesTab({ id, snapshots, version }: { id: string; snapshots: 
                 <ul>
                   {data.impact.matches.slice(0, 50).map((m, i) => (
                     <li key={i}>
-                      <button className="link" onClick={() => call("openFile", { file: m.file, line: m.line })}>
+                      <button className="link" onClick={() => call("openFile", { file: m.file, project, line: m.line })}>
                         {m.file}:{m.line}
                       </button>{" "}
                       <code className="muted">{m.text.trim().slice(0, 120)}</code>
@@ -232,7 +232,7 @@ export function ChangesTab({ id, snapshots, version }: { id: string; snapshots: 
 
 // ---------------------------------------------------------------------------
 
-export function HistoryTab({ id, snapshots, shownId, show }: { id: string; snapshots: SnapshotMeta[]; shownId?: string; show: (id: string) => void }) {
+export function HistoryTab({ id, project, snapshots, shownId, show }: { id: string; project?: string; snapshots: SnapshotMeta[]; shownId?: string; show: (id: string) => void }) {
   if (!snapshots.length) return <Empty>No saved responses yet.</Empty>;
   const baseline = snapshots.find((s) => s.baseline);
   return (
@@ -260,12 +260,12 @@ export function HistoryTab({ id, snapshots, shownId, show }: { id: string; snaps
                 <Eye size={14} />
               </button>
               {baseline && !s.baseline && (
-                <button className="icon" title="Diff vs baseline in editor" aria-label="Diff vs baseline" onClick={() => call("nativeDiff", { kind: "snapshot", id, from: baseline.id, to: s.id })}>
+                <button className="icon" title="Diff vs baseline in editor" aria-label="Diff vs baseline" onClick={() => call("nativeDiff", { kind: "snapshot", id, project, from: baseline.id, to: s.id })}>
                   <GitCompare size={14} />
                 </button>
               )}
               {!s.baseline && s.passed && (
-                <button className="icon" title="Make baseline" aria-label="Make baseline" onClick={() => call("tool:set_baseline", { endpointId: id, snapshotId: s.id })}>
+                <button className="icon" title="Make baseline" aria-label="Make baseline" onClick={() => call("tool:set_baseline", { endpointId: id, project, snapshotId: s.id })}>
                   <Flag size={14} />
                 </button>
               )}
@@ -289,14 +289,14 @@ export function HistoryTab({ id, snapshots, shownId, show }: { id: string; snaps
 
 // ---------------------------------------------------------------------------
 
-export function VersionsTab({ id, revisions, dirty }: { id: string; revisions: Revision[]; dirty: boolean }) {
+export function VersionsTab({ id, project, revisions, dirty }: { id: string; project?: string; revisions: Revision[]; dirty: boolean }) {
   const latest = revisions[0]?.revision ?? 0;
   const [from, setFrom] = useState<number>();
   const [to, setTo] = useState<number>();
   const enough = revisions.length >= 2;
   const { data, error } = useLoad<{ from: Revision; to: Revision; changes: RevisionChange[] }>(
-    () => (enough ? call("tool:diff_revisions", { endpointId: id, from, to }) : Promise.resolve(undefined as never)),
-    [id, from, to, latest]
+    () => (enough ? call("tool:diff_revisions", { endpointId: id, project, from, to }) : Promise.resolve(undefined as never)),
+    [id, project, from, to, latest]
   );
 
   return (
@@ -312,7 +312,7 @@ export function VersionsTab({ id, revisions, dirty }: { id: string; revisions: R
                 className="link"
                 disabled={dirty}
                 title={dirty ? "Save or discard your edits first" : `Restore v${r.revision} as a new version`}
-                onClick={async () => (await confirm(`Restore v${r.revision}?`, "Restore", "The current request is kept as a version, so you can undo this.")) && call("tool:restore_revision", { endpointId: id, revision: r.revision })}
+                onClick={async () => (await confirm(`Restore v${r.revision}?`, "Restore", "The current request is kept as a version, so you can undo this.")) && call("tool:restore_revision", { endpointId: id, project, revision: r.revision })}
               >
                 Restore
               </button>
@@ -335,7 +335,7 @@ export function VersionsTab({ id, revisions, dirty }: { id: string; revisions: R
               {revisions.map((r) => <option key={r.revision} value={r.revision}>v{r.revision}</option>)}
             </select>
             <span className="spacer" />
-            <button onClick={() => call("nativeDiff", { kind: "revision", id, from: data.from.revision, to: data.to.revision })}>
+            <button onClick={() => call("nativeDiff", { kind: "revision", id, project, from: data.from.revision, to: data.to.revision })}>
               <GitCompare size={14} /> Open in editor
             </button>
           </div>
@@ -362,8 +362,8 @@ const short = (v: unknown) => {
 
 // ---------------------------------------------------------------------------
 
-export function SchemaTab({ id, version }: { id: string; version: number }) {
-  const { data, error } = useLoad<ApilotSchema>(() => call("schema", { id }), [id, version]);
+export function SchemaTab({ id, project, version }: { id: string; project?: string; version: number }) {
+  const { data, error } = useLoad<ApilotSchema>(() => call("schema", { id, project }), [id, project, version]);
   if (error) return <Empty>{error}</Empty>;
   if (!data) return <Spinner />;
   if (!data.type) return <Empty>No schema yet. It is learned from successful responses, so send the request first.</Empty>;
@@ -420,13 +420,13 @@ const LANGS = [
   ["swift", "Swift"],
 ] as const;
 
-export function CodeTab({ id, version }: { id: string; version: number }) {
+export function CodeTab({ id, project, version }: { id: string; project?: string; version: number }) {
   const [language, setLanguage] = useState<string>(() => persisted.get().lang ?? "dart");
   const [flavor, setFlavor] = useState("freezed");
   const [files, setFiles] = useState<{ path: string; content: string }[]>([]);
   const [result, setResult] = useState<{ written: string[]; unchanged: string[]; skipped: string[] } | null>(null);
   const [error, setError] = useState("");
-  const args = { endpointId: id, language, flavor: language === "dart" ? flavor : undefined };
+  const args = { endpointId: id, project, language, flavor: language === "dart" ? flavor : undefined };
 
   useEffect(() => {
     persisted.set({ ...persisted.get(), lang: language });
@@ -435,7 +435,7 @@ export function CodeTab({ id, version }: { id: string; version: number }) {
       .then((r) => (setFiles(r.files), setError("")))
       .catch((e: Error) => (setFiles([]), setError(e.message)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, language, flavor, version]);
+  }, [id, project, language, flavor, version]);
 
   return (
     <div className="code-tab">
@@ -457,9 +457,9 @@ export function CodeTab({ id, version }: { id: string; version: number }) {
       {error && <div className="banner error">{error}</div>}
       {result && (
         <div className="banner ok">
-          {result.written.length ? <>Wrote {result.written.map((f) => <FileLink key={f} file={f} />)} </> : null}
-          {result.unchanged.length ? <>Up to date: {result.unchanged.map((f) => <FileLink key={f} file={f} />)} </> : null}
-          {result.skipped.length ? <>Skipped hand-written: {result.skipped.map((f) => <FileLink key={f} file={f} />)}</> : null}
+          {result.written.length ? <>Wrote {result.written.map((f) => <FileLink key={f} file={f} project={project} />)} </> : null}
+          {result.unchanged.length ? <>Up to date: {result.unchanged.map((f) => <FileLink key={f} file={f} project={project} />)} </> : null}
+          {result.skipped.length ? <>Skipped hand-written: {result.skipped.map((f) => <FileLink key={f} file={f} project={project} />)}</> : null}
         </div>
       )}
       {files.map((f) => (
@@ -476,9 +476,9 @@ export function CodeTab({ id, version }: { id: string; version: number }) {
   );
 }
 
-function FileLink({ file }: { file: string }) {
+function FileLink({ file, project }: { file: string; project?: string }) {
   return (
-    <button className="link" onClick={() => call("openFile", { file })}>
+    <button className="link" onClick={() => call("openFile", { file, project })}>
       {file}
     </button>
   );

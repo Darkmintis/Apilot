@@ -21,11 +21,21 @@ Apilot's MCP tools let you do everything the Apilot panel can. **Never guess a f
 type, or nullability — look at a real response.**
 
 ## Before writing API code
-1. \`list_endpoints\` — find the endpoint id (e.g. \`orders.list\`).
+1. \`list_endpoints\` — find the endpoint id (e.g. \`orders.list\`) and the project it belongs to.
 2. \`get_endpoint\` — definition + latest real response. If there is none, \`run_endpoint\`.
 3. \`get_schema\` — types, required vs optional, nullable, enums (learned from every saved response).
 4. \`generate_code\` (dart | typescript | kotlin | swift) — writes models + a typed call. Use them;
    don't hand-write models for Apilot endpoints.
+
+## Several projects in one workspace
+A folder can hold more than one Apilot project (the folder itself, and any nested folder with
+an \`.apilot/apilot.yaml\`). \`list_endpoints\` returns each project with its **id** and **root**.
+Every endpoint tool takes an optional \`project\`:
+
+- If an endpoint id is unique in the workspace, leave \`project\` out.
+- If the same id exists in two projects, pass \`project: "<id>"\` (e.g. \`"services/api"\`).
+- You can also write the id as \`project::endpoint\`, e.g. \`services/api::orders.list\`.
+- \`run_collection\`, \`add_endpoint\`, \`import_spec\`, and the variable tools are project-scoped too.
 
 ## When the backend changes
 1. \`run_endpoint\` (or \`run_collection\`) — each run is compared to the endpoint's **baseline**.
@@ -58,6 +68,7 @@ type, or nullability — look at a real response.**
 - \`.apilot/snapshots/<id>/*.json\` — real responses (redacted); \`baseline\` holds the accepted snapshot id
 - \`.apilot/history/<id>/<n>.yaml\` — request revisions
 - CLI: \`apilot run <id>\`, \`apilot diff <id>\`, \`apilot codegen <id> --lang dart\`, \`apilot check\`
+  (add \`--project <id>\` to target one project)
 
 Endpoint file example:
 \`\`\`yaml

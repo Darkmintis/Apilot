@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { KeyRound, Play, Trash2, Upload } from "lucide-react";
-import { call, confirm, type AppState } from "../api";
+import { call, confirm, type AppState, type ProjectInfo } from "../api";
 import type { View } from "../App";
 import { Empty, Spinner } from "./ResultTabs";
 
@@ -11,7 +11,8 @@ interface Variable {
   hasValue?: boolean;
 }
 
-export function WelcomePage({ hasFolder }: { hasFolder: boolean }) {
+export function WelcomePage({ hasFolder, projects }: { hasFolder: boolean; projects?: ProjectInfo[] }) {
+  const others = (projects ?? []).filter((p) => p.hasApilot);
   return (
     <div className="page welcome">
       <h1>Apilot</h1>
@@ -27,20 +28,26 @@ export function WelcomePage({ hasFolder }: { hasFolder: boolean }) {
       ) : (
         <p className="muted">Open a folder to get started.</p>
       )}
+      {others.length > 0 && (
+        <p className="muted small">
+          {others.length} nested project{others.length === 1 ? "" : "s"} already {others.length === 1 ? "has" : "have"} Apilot:{" "}
+          {others.map((p) => p.relPath || p.name).join(", ")}.
+        </p>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
 
-export function EnvironmentsPage({ env, environments, version, changeEnv }: { env: string; environments: string[]; version: number; changeEnv: (e: string) => void }) {
+export function EnvironmentsPage({ project, env, environments, version, changeEnv }: { project?: string; env: string; environments: string[]; version: number; changeEnv: (e: string) => void }) {
   const [vars, setVars] = useState<Variable[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [newVar, setNewVar] = useState<{ name: string; type: "text" | "secret"; value: string }>({ name: "", type: "text", value: "" });
   const [newEnv, setNewEnv] = useState("");
 
-  const load = () => call<{ variables: Variable[] }>("variables", { env }).then((r) => setVars(r.variables), (e: Error) => setError(e.message));
+  const load = () => call<{ variables: Variable[] }>("variables", { env, project }).then((r) => setVars(r.variables), (e: Error) => setError(e.message));
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -61,10 +68,10 @@ export function EnvironmentsPage({ env, environments, version, changeEnv }: { en
     const name = newVar.name.trim();
     if (!/^[A-Za-z_][\w.-]*$/.test(name)) return setError("Variable names start with a letter or _ and contain letters, digits, _ . -");
     if (newVar.type === "secret") {
-      await act(call("tool:set_variable", { env, name, type: "secret" }));
-      if (newVar.value) await act(call("setSecret", { env, name, value: newVar.value }), `${name} saved to your keychain.`);
+      await act(call("tool:set_variable", { env, project, name, type: "secret" }));
+      if (newVar.value) await act(call("setSecret", { env, project, name, value: newVar.value }), `${name} saved to your keychain.`);
     } else {
-      await act(call("tool:set_variable", { env, name, type: "text", value: newVar.value }));
+      await act(call("tool:set_variable", { env, project, name, type: "text", value: newVar.value }));
     }
     setNewVar({ name: "", type: newVar.type, value: "" });
   };
@@ -84,7 +91,7 @@ export function EnvironmentsPage({ env, environments, version, changeEnv }: { en
         </div>
         <span className="spacer" />
         <input value={newEnv} placeholder="new environment, e.g. staging" onChange={(e) => setNewEnv(e.target.value)} aria-label="New environment name" />
-        <button disabled={!newEnv.trim()} onClick={() => act(call("tool:create_environment", { name: newEnv.trim(), copyFrom: env }), `Created ${newEnv} (copied from ${env}; secret values are not copied).`).then(() => setNewEnv(""))}>
+        <button disabled={!newEnv.trim()} onClick={() => act(call("tool:create_environment", { project, name: newEnv.trim(), copyFrom: env }), `Created ${newEnv} (copied from ${env}; secret values are not copied).`).then(() => setNewEnv(""))}>
           Add environment
         </button>
       </div>
@@ -104,7 +111,7 @@ export function EnvironmentsPage({ env, environments, version, changeEnv }: { en
         </thead>
         <tbody>
           {vars.map((v) => (
-            <VariableRow key={`${env}:${v.name}`} env={env} v={v} act={act} />
+            <VariableRow key={`${env}:${v.name}`} env={env} project={project} v={v} act={act} />
           ))}
           <tr className="new">
             <td>
@@ -139,7 +146,7 @@ export function EnvironmentsPage({ env, environments, version, changeEnv }: { en
   );
 }
 
-function VariableRow({ env, v, act }: { env: string; v: Variable; act: (p: Promise<unknown>, msg?: string) => Promise<void> }) {
+function VariableRow({ env, project, v, act }: { env: string; project?: string; v: Variable; act: (p: Promise<unknown>, msg?: string) => Promise<void> }) {
   const [value, setValue] = useState(v.value ?? "");
   const [secret, setSecret] = useState("");
   const saved = useRef(v.value ?? "");
@@ -159,7 +166,7 @@ function VariableRow({ env, v, act }: { env: string; v: Variable; act: (p: Promi
           <input
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            onBlur={() => value !== saved.current && act(call("tool:set_variable", { env, name: v.name, type: "text", value }))}
+            onBlur={() => value !== saved.current && act(call("tool:set_variable", { env, project, name: v.name, type: "text", value }))}
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
             spellCheck={false}
             aria-label={`${v.name} value`}
@@ -168,7 +175,7 @@ function VariableRow({ env, v, act }: { env: string; v: Variable; act: (p: Promi
           <div className="row gap-s">
             <span className={`dot ${v.hasValue ? "passed" : "failed"}`} />
             <input type="password" value={secret} placeholder={v.hasValue ? "•••••••• (set; type to replace)" : "not set"} onChange={(e) => setSecret(e.target.value)} aria-label={`${v.name} secret value`} />
-            <button disabled={!secret} onClick={() => act(call("setSecret", { env, name: v.name, value: secret }), `${v.name} saved to your keychain.`).then(() => setSecret(""))}>
+            <button disabled={!secret} onClick={() => act(call("setSecret", { env, project, name: v.name, value: secret }), `${v.name} saved to your keychain.`).then(() => setSecret(""))}>
               Save
             </button>
           </div>
@@ -179,7 +186,7 @@ function VariableRow({ env, v, act }: { env: string; v: Variable; act: (p: Promi
           className="icon danger"
           aria-label={`Delete ${v.name}`}
           title="Delete variable"
-          onClick={async () => (await confirm(`Delete “${v.name}” from ${env}?`, "Delete", v.type === "secret" ? "Its keychain value is removed too." : undefined)) && act(call("tool:delete_variable", { env, name: v.name }))}
+          onClick={async () => (await confirm(`Delete “${v.name}” from ${env}?`, "Delete", v.type === "secret" ? "Its keychain value is removed too." : undefined)) && act(call("tool:delete_variable", { env, project, name: v.name }))}
         >
           <Trash2 size={14} />
         </button>
@@ -190,7 +197,7 @@ function VariableRow({ env, v, act }: { env: string; v: Variable; act: (p: Promi
 
 // ---------------------------------------------------------------------------
 
-export function ImportPage({ env, setView }: { env: string; setView: (v: View) => void }) {
+export function ImportPage({ project, env, setView }: { project?: string; env: string; setView: (v: View) => void }) {
   const [source, setSource] = useState<"curl" | "postman" | "openapi">("curl");
   const [content, setContent] = useState("");
   const [collection, setCollection] = useState("");
@@ -209,7 +216,7 @@ export function ImportPage({ env, setView }: { env: string; setView: (v: View) =
   const run = async () => {
     setBusy(true);
     try {
-      setResult(await call("tool:import_spec", { source, content, collection: collection || undefined, env }));
+      setResult(await call("tool:import_spec", { source, content, collection: collection || undefined, project, env }));
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -253,7 +260,7 @@ export function ImportPage({ env, setView }: { env: string; setView: (v: View) =
           <ul>
             {result.created.map((id) => (
               <li key={id}>
-                <button className="link" onClick={() => setView({ kind: "endpoint", id })}>{id}</button>
+                <button className="link" onClick={() => setView({ kind: "endpoint", id, project })}>{id}</button>
               </li>
             ))}
           </ul>
@@ -274,7 +281,7 @@ interface RunAllResult {
   results: { endpointId: string; name: string; method: string; status?: number; timeMs?: number; passed: boolean; breaking: boolean; error?: string }[];
 }
 
-export function RunAllPage({ env, state, autorun, setView }: { env: string; state: AppState; autorun?: boolean; setView: (v: View) => void }) {
+export function RunAllPage({ project, env, state, autorun, setView }: { project?: string; env: string; state: AppState; autorun?: boolean; setView: (v: View) => void }) {
   const [collection, setCollection] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<RunAllResult | null>(null);
@@ -285,7 +292,7 @@ export function RunAllPage({ env, state, autorun, setView }: { env: string; stat
     setBusy(true);
     setError("");
     try {
-      setResult(await call("tool:run_collection", { collectionId: collection || undefined, env }));
+      setResult(await call("tool:run_collection", { collectionId: collection || undefined, project, env }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -334,8 +341,8 @@ export function RunAllPage({ env, state, autorun, setView }: { env: string; stat
                   key={r.endpointId}
                   className="clickable"
                   tabIndex={0}
-                  onClick={() => setView({ kind: "endpoint", id: r.endpointId, tab: r.breaking ? "changes" : "response" })}
-                  onKeyDown={(e) => e.key === "Enter" && setView({ kind: "endpoint", id: r.endpointId, tab: r.breaking ? "changes" : "response" })}
+                  onClick={() => setView({ kind: "endpoint", id: r.endpointId, project, tab: r.breaking ? "changes" : "response" })}
+                  onKeyDown={(e) => e.key === "Enter" && setView({ kind: "endpoint", id: r.endpointId, project, tab: r.breaking ? "changes" : "response" })}
                 >
                   <td><span className={`method m-${r.method}`}>{r.method}</span> {r.name}</td>
                   <td>{r.status ? <span className={`status s${String(r.status)[0]}`}>{r.status}</span> : "—"}</td>
