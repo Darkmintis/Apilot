@@ -94,6 +94,8 @@ Ask the user before installing anything. VS Code (use \`cursor\` in place of \`c
 
 1. \`code --list-extensions --show-versions | grep -i darkmintis.apilot\` — is it already there?
 2. \`code --install-extension darkmintis.apilot\` — from the Marketplace.
+   If VS Code runs profiles (Settings → Profiles), that command installs into the *Default*
+   profile only; add \`--profile "<name>"\` to reach the profile the user is working in.
 3. If that fails, Apilot may not be published there yet. Take the newest release — the file
    name carries the version, so never hard-code it:
    \`gh release download --repo Darkmintis/Apilot --pattern "*.vsix"\` then
