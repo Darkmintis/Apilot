@@ -54,8 +54,10 @@ export interface ApilotApi {
 export function activate(ctx: vscode.ExtensionContext): ApilotApi {
   ext = new ApilotExtension(ctx);
   return {
-    projects: () =>
-      ext!.hub.projects.map((p) => ({ id: p.id, name: p.name, root: p.root, hasApilot: p.hasApilot })),
+    projects: () => {
+      ext!.rediscover();
+      return ext!.hub.projects.map((p) => ({ id: p.id, name: p.name, root: p.root, hasApilot: p.hasApilot }));
+    },
     topLevel: () => ext!.topLevel(),
   };
 }
@@ -105,6 +107,8 @@ class ApilotExtension implements vscode.Disposable {
   private readonly tree = new EndpointTree(this);
   private readonly disposables: vscode.Disposable[] = [];
   private refreshTimer: NodeJS.Timeout | undefined;
+  /** When the project list was last re-scanned (see `rediscover`). */
+  private lastScan = 0;
   private watchers: vscode.Disposable[] = [];
 
   constructor(private readonly ctx: vscode.ExtensionContext) {
@@ -138,12 +142,15 @@ class ApilotExtension implements vscode.Disposable {
       cmd("apilot.runAll", () => this.openPanel({ view: "runAll", autorun: true })),
       cmd("apilot.runEndpoint", (item?: EndpointItem | string) => this.runFromTree(item)),
       cmd("apilot.openFile", (item?: EndpointItem) => item && this.openFile(item.file, undefined, item.project.id)),
-      cmd("apilot.refresh", () => this.refresh()),
+      cmd("apilot.refresh", () => {
+        this.rediscover(true);
+        this.refresh();
+      }),
       cmd("apilot.setupAi", () => this.setupAi(true)),
       cmd("apilot.removeAi", () => this.removeAi()),
       vscode.workspace.onDidSaveTextDocument((doc) => this.onSave(doc)),
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
-        this.rediscover();
+        this.rediscover(true);
         this.watchProjects();
         this.refresh();
       }),
@@ -173,8 +180,18 @@ class ApilotExtension implements vscode.Disposable {
     return this.folders[0];
   }
 
-  /** Re-scan the workspace folders for Apilot projects. */
-  rediscover(): void {
+  /**
+   * Re-scan the workspace folders for Apilot projects.
+   *
+   * The file watcher below is the fast path, but it is not guaranteed —
+   * on CI it can fall back to polling, or silently stop if the OS runs out
+   * of watch handles. Every surface that reads the project list therefore
+   * re-scans on demand, throttled so a burst of changes costs one walk.
+   */
+  rediscover(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.lastScan < 500) return;
+    this.lastScan = now;
     this.hub.setProjects(discoverProjects(this.folders));
   }
 
@@ -189,7 +206,7 @@ class ApilotExtension implements vscode.Disposable {
       const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(folder), "**/.apilot/**"));
       const onChange = (uri: vscode.Uri) => {
         if (uri.fsPath.includes(`${path.sep}.local${path.sep}`)) return;
-        if (uri.fsPath.endsWith(`${path.sep}apilot.yaml`)) this.rediscover();
+        if (uri.fsPath.endsWith(`${path.sep}apilot.yaml`)) this.rediscover(true);
         this.scheduleRefresh();
       };
       watcher.onDidCreate(onChange);
@@ -256,7 +273,7 @@ class ApilotExtension implements vscode.Disposable {
     });
     if (name === undefined) return;
     this.hub.initProject(name || "my-api", project.id);
-    this.rediscover();
+    this.rediscover(true);
     await this.ctx.workspaceState.update("apilot.activeProject", project.id);
     this.onProjectReady();
     this.refresh();
@@ -550,6 +567,7 @@ class ApilotExtension implements vscode.Disposable {
   }
 
   private state() {
+    this.rediscover();
     const projects = this.hub.projects.map((p) => ({
       id: p.id,
       name: p.name,
@@ -709,6 +727,7 @@ class ApilotExtension implements vscode.Disposable {
   }
 
   refresh(): void {
+    this.rediscover();
     vscode.commands.executeCommand("setContext", "apilot.hasProject", this.hasProject);
     this.tree.refresh();
     this.post({ type: "changed" });
@@ -804,6 +823,9 @@ class EndpointTree implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   getChildren(parent?: vscode.TreeItem): vscode.TreeItem[] {
+    // Expanding or focusing the view re-scans, so a project added by hand
+    // shows up even if the file watcher missed it.
+    if (!parent) this.ext.rediscover();
     const projects = this.ext.hub.projects;
     if (!projects.length) return []; // welcome view shows Init / Import buttons
     // One project: show its collections directly, as before.

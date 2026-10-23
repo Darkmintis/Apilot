@@ -10,7 +10,7 @@
  * project, and one place that resolves an endpoint id to the right project.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { EndpointEntry } from "./types.js";
@@ -117,22 +117,18 @@ export function discoverProjects(folders: string[], opts: DiscoverOptions = {}):
         out.push(makeEntry(folder, dir, rel, multi, usedIds));
       }
 
-      let names: string[];
+      let entries: Dirent[];
       try {
-        names = readdirSync(dir);
+        // withFileTypes avoids a stat() per entry — this runs on every refresh.
+        entries = readdirSync(dir, { withFileTypes: true });
       } catch {
         return;
       }
-      for (const name of names.sort()) {
-        if (name.startsWith(".") || IGNORED_DIRS.has(name)) continue;
-        const full = join(dir, name);
-        let st;
-        try {
-          st = statSync(full);
-        } catch {
-          continue;
-        }
-        if (st.isDirectory()) walk(full, depth + 1);
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue; // symlinks are skipped too, so no cycles
+        if (entry.name.startsWith(".") || IGNORED_DIRS.has(entry.name)) continue;
+        walk(join(dir, entry.name), depth + 1);
       }
     };
 

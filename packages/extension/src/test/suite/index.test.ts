@@ -25,6 +25,18 @@ async function api(): Promise<ApilotApi> {
   return (await vscode.extensions.getExtension("Darkmintis.apilot")!.activate()) as unknown as ApilotApi;
 }
 
+/** A second project nested inside the workspace folder. Idempotent. */
+function createNestedProject(): string {
+  const nested = path.join(root(), "services", "api");
+  fs.mkdirSync(path.join(nested, ".apilot", "collections", "orders"), { recursive: true });
+  fs.writeFileSync(path.join(nested, ".apilot", "apilot.yaml"), "name: Nested API\n");
+  fs.writeFileSync(
+    path.join(nested, ".apilot", "collections", "orders", "list.yaml"),
+    'name: List\nmethod: GET\nurl: "{{baseUrl}}/orders"\n'
+  );
+  return nested;
+}
+
 suite("Apilot extension", () => {
   suiteSetup(async () => {
     await vscode.extensions.getExtension("Darkmintis.apilot")!.activate();
@@ -71,21 +83,14 @@ suite("Apilot extension", () => {
   });
 
   test("finds Apilot projects nested inside the workspace folder", async () => {
-    // A nested project, next to the one in the workspace root.
-    const nested = path.join(root(), "services", "api");
-    fs.mkdirSync(path.join(nested, ".apilot", "collections", "orders"), { recursive: true });
-    fs.writeFileSync(path.join(nested, ".apilot", "apilot.yaml"), "name: Nested API\n");
-    fs.writeFileSync(
-      path.join(nested, ".apilot", "collections", "orders", "list.yaml"),
-      "name: List\nmethod: GET\nurl: \"{{baseUrl}}/orders\"\n"
-    );
+    const nested = createNestedProject();
+    // Re-scan on demand instead of waiting for the OS file watcher: on CI the
+    // watcher may fall back to polling, or stop when watch handles run out.
+    await vscode.commands.executeCommand("apilot.refresh");
 
     const a = await api();
-    const projects = await waitFor(() => {
-      const found = a.projects().filter((p) => p.root === nested);
-      return found.length ? found : false;
-    });
-    assert.strictEqual(projects.length, 1);
+    const projects = a.projects().filter((p) => p.root === nested);
+    assert.strictEqual(projects.length, 1, "nested project not discovered");
     assert.strictEqual(projects[0]!.hasApilot, true);
 
     // With more than one project, the sidebar lists one row per project.
@@ -95,6 +100,9 @@ suite("Apilot extension", () => {
   });
 
   test("the AI sees every project through the bridge", async () => {
+    createNestedProject(); // idempotent — this test also runs on its own
+    await vscode.commands.executeCommand("apilot.refresh");
+
     const file = path.join(root(), ".apilot/.local/bridge.json");
     const { port, token } = JSON.parse(fs.readFileSync(file, "utf-8"));
     const res = (await (await fetch(`http://127.0.0.1:${port}/call`, {
