@@ -5,6 +5,7 @@ Keep your API requests and their real responses in your repo, next to the code t
 ## What you get
 
 - **Endpoints as YAML** in `.apilot/collections/`, reviewed and versioned like code. Folders can share headers and auth (`_folder.yaml`).
+- **Several projects per workspace.** Every folder with an `.apilot/apilot.yaml` is found — the workspace root and any nested one — each with its own endpoints, environments, snapshots, and history. The sidebar groups them, and your AI can address a project by id.
 - **Real responses, saved.** Every run saves a redacted snapshot. The first successful run becomes the **baseline**, and later runs are compared to it.
 - **Breaking-change alerts.** Removed fields, type changes, and values becoming nullable are breaking. Added fields are safe. The Changes tab shows a split diff and the lines of code that are affected.
 - **Versions.** Every edit to a request is recorded as v1, v2, … ("added query expand"), whether it comes from the panel, the YAML, or your AI. You can compare any two versions and restore one in a click.
