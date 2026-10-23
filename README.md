@@ -136,11 +136,12 @@ Commit the generated skill files (`.cursor/skills/apilot/`, `.claude/skills/apil
 `.github/instructions/apilot.instructions.md`). Every teammate's AI agent then knows how to
 install the extension and set itself up, even if only one developer uses Apilot.
 
-To cut a release yourself: bump `packages/extension/package.json` version, commit, then:
+To cut a release yourself: bump the version in every `packages/*/package.json`, commit, then:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0   # Release workflow builds the .vsix and attaches it
+VERSION="$(node -p "require('./packages/extension/package.json').version")"
+git tag "v$VERSION"
+git push origin "v$VERSION"   # Release workflow builds the .vsix and attaches it
 ```
 
 ## Publish npm packages
@@ -154,6 +155,8 @@ pnpm publish:packages   # @apilot/core, skill, codegen, mcp, cli (dependency ord
 
 ## Development
 
+Requires **Node 24** (see `.nvmrc`) and pnpm 11 via corepack — run `corepack enable` once.
+
 ```bash
 pnpm install
 pnpm build                                    # all packages + webview
@@ -166,7 +169,15 @@ pnpm --filter apilot test                     # integration tests in real VS Cod
 pnpm --filter apilot package                  # build the .vsix
 ```
 
+`pnpm --filter apilot test` downloads VS Code on first run. On a headless Linux machine use
+`xvfb-run -a pnpm --filter apilot test`.
+
 Personal notes, plans, and local install scripts live in **`.local/`** (gitignored — never published). Per-project Apilot runtime state is under **`.apilot/.local/`**.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through
+[SECURITY.md](SECURITY.md) — privately, never in a public issue.
 
 ## License
 

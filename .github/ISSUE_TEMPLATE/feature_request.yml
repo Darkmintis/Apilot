@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a capability, or a change to how Apilot behaves.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Apilot is not a Postman replacement. It exists to keep the API contract, its history,
+        and the code in sync — so requests that make it a general-purpose API client are
+        likely to be declined. It helps to say which of those three you are improving.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Apilot makes hard or impossible today?
+      placeholder: When the backend adds a field, I cannot see which requests already depend on the old shape.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have tried
+      description: Including how you handle this today — that usually shows the real shape of the problem.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Panel / editor UI
+        - Requests and environments
+        - Snapshots, diffs, breaking changes
+        - Codegen
+        - CLI / CI
+        - AI tools (MCP) and skills
+        - Several projects in one workspace
+        - Something else
+    validations:
+      required: true

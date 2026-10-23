@@ -1,0 +1,103 @@
+name: Bug report
+description: Something broke — a request, a diff, the panel, the AI tools, or the CLI.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A few fields below save a round trip — especially the profile
+        one: with VS Code profiles, an extension can be installed and still never load.
+
+        **Never paste a token, password, or cookie here.** Replace it with `REDACTED`.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+      placeholder: I ran "orders.list" and expected a 200, but the panel stayed on "Running" forever.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a folder with an .apilot/ project
+        2. Run ...
+        3. See ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: editor
+    attributes:
+      label: Editor
+      options:
+        - VS Code
+        - Cursor
+        - Both
+        - CLI only
+        - MCP server without an editor
+    validations:
+      required: true
+
+  - type: input
+    id: editor-version
+    attributes:
+      label: Editor version
+      description: Help → About. For the CLI, the output of `node --version`.
+      placeholder: 1.143.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: profile
+    attributes:
+      label: VS Code profile
+      description: Settings → Profiles. Extensions installed into the Default profile do not load in a named one.
+      options:
+        - Default profile
+        - A named profile
+        - Not using profiles
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: apilot-version
+    attributes:
+      label: Apilot version
+      description: Extensions view, or `code --list-extensions --show-versions | grep apilot`.
+      placeholder: 0.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11, macOS 15.1, Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (optional)
+      description: |
+        VS Code: Help → Toggle Developer Tools → Console.
+        Errors from the extension are prefixed with `[apilot]`.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed tokens, passwords, and cookies from this report.
+          required: true
+        - label: This is not a security vulnerability (those go to SECURITY.md, privately).
+          required: true
