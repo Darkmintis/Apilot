@@ -116,12 +116,25 @@ Each project has its own `.apilot/` folder. A workspace can hold several of them
 
 ## Install the extension
 
-Download the latest `.vsix` from [GitHub Releases](https://github.com/Darkmintis/Apilot/releases), then:
+Apilot is not on the Marketplace yet, so install the newest build from the
+[Releases page](https://github.com/Darkmintis/Apilot/releases/latest) — or fetch it without
+leaving the terminal (the file name carries the version, so don't hard-code it):
 
 ```bash
-cursor --install-extension apilot-0.1.0.vsix
-# or: code --install-extension apilot-0.1.0.vsix
+gh release download --repo Darkmintis/Apilot --pattern "*.vsix"
+code --install-extension ./apilot-*.vsix --force
+# or: cursor --install-extension ./apilot-*.vsix --force
 ```
+
+Without the GitHub CLI, grab the `.vsix` from the release page and pass the exact file name,
+e.g. `code --install-extension apilot-0.2.0.vsix`.
+
+Once the Marketplace listing is live, `code --install-extension darkmintis.apilot` is the
+shorter path — and publishing to Open VSX would give Cursor the same one-liner.
+
+Commit the generated skill files (`.cursor/skills/apilot/`, `.claude/skills/apilot/`,
+`.github/instructions/apilot.instructions.md`). Every teammate's AI agent then knows how to
+install the extension and set itself up, even if only one developer uses Apilot.
 
 To cut a release yourself: bump `packages/extension/package.json` version, commit, then:
 

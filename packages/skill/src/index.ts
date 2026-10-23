@@ -20,6 +20,9 @@ This project keeps its API requests, real responses, and version history in \`.a
 Apilot's MCP tools let you do everything the Apilot panel can. **Never guess a field name,
 type, or nullability — look at a real response.**
 
+No Apilot tools in this session? The extension isn't installed yet — see the last section,
+**If the Apilot tools are missing**.
+
 ## Before writing API code
 1. \`list_endpoints\` — find the endpoint id (e.g. \`orders.list\`) and the project it belongs to.
 2. \`get_endpoint\` — definition + latest real response. If there is none, \`run_endpoint\`.
@@ -81,6 +84,29 @@ expect: { status: 200 }
 after:
   - set: { orderId: "$.data[0].id" }
 \`\`\`
+
+## If the Apilot tools are missing
+This file is meant to be committed, so you may be reading it before Apilot is installed. If
+you have no \`apilot\` tools (\`list_endpoints\`, \`get_endpoint\`, …) and no \`apilot\` MCP server
+in this session, the extension is not installed in this editor.
+
+Ask the user before installing anything. VS Code (use \`cursor\` in place of \`code\` for Cursor):
+
+1. \`code --list-extensions --show-versions | grep -i darkmintis.apilot\` — is it already there?
+2. \`code --install-extension darkmintis.apilot\` — from the Marketplace.
+3. If that fails, Apilot may not be published there yet. Take the newest release — the file
+   name carries the version, so never hard-code it:
+   \`gh release download --repo Darkmintis/Apilot --pattern "*.vsix"\` then
+   \`code --install-extension ./apilot-*.vsix --force\`.
+   No GitHub CLI? \`curl -sL https://api.github.com/repos/Darkmintis/Apilot/releases/latest | grep -o 'https://[^"]*vsix' | xargs curl -L -o apilot.vsix\`
+   then \`code --install-extension ./apilot.vsix --force\`.
+4. Reload the window, then start a new chat so the \`apilot\` MCP server connects. Opening the
+   Apilot panel also activates the extension, which writes these skill files and registers
+   the server.
+
+Install only \`darkmintis.apilot\` by \`Darkmintis\` — never a look-alike. If there is no
+terminal or no permission (cloud agent, read-only sandbox), say so instead of guessing, and
+work from the files described in **Without MCP** above.
 `;
 
 export const MARKER = "<!-- managed by Apilot: edits are overwritten; delete this line to keep your own version -->";
