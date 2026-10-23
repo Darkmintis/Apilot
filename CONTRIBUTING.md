@@ -62,6 +62,13 @@ the editor, `cli` owns CI. Logic in the extension that could live in `core` belo
 
 ## Versions
 
-All packages share one version and move together. A release is a tag matching
-`packages/extension/package.json`; the workflow refuses a mismatch. Do not tag from a branch
-whose CI is red.
+All packages share one version and move together: bump every `packages/*/package.json`,
+commit, then tag. The release workflow refuses a tag that does not match
+`packages/extension/package.json`, and builds the `.vsix` from that commit. Do not tag from a
+branch whose CI is red.
+
+```bash
+VERSION="$(node -p "require('./packages/extension/package.json').version")"
+git tag "v$VERSION"
+git push origin "v$VERSION"
+```

@@ -136,14 +136,6 @@ Commit the generated skill files (`.cursor/skills/apilot/`, `.claude/skills/apil
 `.github/instructions/apilot.instructions.md`). Every teammate's AI agent then knows how to
 install the extension and set itself up, even if only one developer uses Apilot.
 
-To cut a release yourself: bump the version in every `packages/*/package.json`, commit, then:
-
-```bash
-VERSION="$(node -p "require('./packages/extension/package.json').version")"
-git tag "v$VERSION"
-git push origin "v$VERSION"   # Release workflow builds the .vsix and attaches it
-```
-
 ## Publish npm packages
 
 Requires npm login with rights to the `@apilot` scope:
@@ -181,4 +173,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Security reports go through
 
 ## License
 
-MIT
+[MIT](LICENSE)
