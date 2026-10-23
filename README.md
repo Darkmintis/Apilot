@@ -8,14 +8,13 @@ It is not a Postman replacement. It exists to keep your API contract, its histor
 
 ## Features
 
-- **GUI first.** The Apilot panel has a request editor, response view, **Changes** (split diff of baseline vs latest, with breaking/warning/safe labels and code impact), **History** (every saved response; set any as the baseline), **Versions** (v1, v2, … of the request definition, with diff and restore), **Schema**, **Code**, **Environments**, **Import**, and **Run all**.
-- **Several projects in one workspace.** A folder can hold more than one Apilot project — the folder itself and any nested folder with an `.apilot/apilot.yaml`. All of them are found and shown; the sidebar lists one group per project, and a folder without Apilot still offers to initialize.
-- **Breaking-change detection.** Removed fields, type changes, non-null becoming nullable, and removed enum values are breaking. Added fields are safe.
-- **Lightweight version control for endpoints.** Every save is recorded in `.apilot/history/`, whether it comes from the GUI, a hand edit, or the AI.
-- **Codegen.** Dart (freezed or plain + Dio), TypeScript (zod + fetch), Kotlin (kotlinx + Retrofit), and Swift (Codable). Quicktype-style: identical shapes share one class, array items get singular names, repeated strings become enums with an `unknown` fallback, ISO dates become date types, and id-keyed objects become maps. Files you wrote by hand are never overwritten.
-- **Chaining and folder defaults.** Chain values with `after: [{ set: { orderId: "$.data[0].id" } }]`. `_folder.yaml` can set shared headers and auth, plus the run `order`.
-- **Import** from cURL, Postman v2, or OpenAPI/Swagger.
-- **AI with no setup.** The extension writes skills to `.cursor/skills/`, `.claude/skills/`, and `.github/instructions/`, and registers the MCP server (24 tools) with Cursor or VS Code. There is no "connect" button.
+- **GUI first.** Request editor, response view, and a baseline-vs-latest split diff labelled breaking / warning / safe, showing the code it affects. Environments, import, and run all live in the same panel.
+- **Every project in the workspace.** Each `.apilot/apilot.yaml`, nested or not, becomes its own sidebar group.
+- **History and versions.** Every save lands in `.apilot/history/`; any response can become the baseline, and request versions can be diffed and restored.
+- **Breaking-change detection.** Removed fields, type changes, new nullability, and dropped enum values are breaking. Added fields are safe.
+- **Codegen.** Dart, TypeScript, Kotlin, Swift. Identical shapes share a class, repeated strings become enums, ISO dates stay dates — and hand-written files are never overwritten.
+- **Chaining, defaults, imports.** Chain values with `after: [{ set: {...} }]`, share headers/auth and run order from `_folder.yaml`, and import from cURL, Postman v2, or OpenAPI.
+- **AI with no setup.** Writes skills for Cursor, Claude, and Copilot and registers its 24-tool MCP server. No connect button.
 - **CI.** `apilot check` fails the build on errors or breaking changes.
 
 ## Several projects in one workspace
