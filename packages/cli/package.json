@@ -1,6 +1,6 @@
 {
   "name": "@apilot/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Apilot CLI — run endpoints, generate code, and check API contracts from the command line.",
   "license": "MIT",
   "type": "module",

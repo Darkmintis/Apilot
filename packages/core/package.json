@@ -1,6 +1,6 @@
 {
   "name": "@apilot/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Core logic for Apilot — registry, runner, variables, snapshots, differ, schema. Zero editor dependencies.",
   "license": "MIT",
   "type": "module",

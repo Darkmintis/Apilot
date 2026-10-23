@@ -2,7 +2,7 @@
   "name": "apilot",
   "displayName": "Apilot",
   "description": "Your API requests and real responses, versioned in the codebase. GitHub-style response diffs with breaking-change alerts, typed model generation, and an AI assistant that knows your API.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "Darkmintis",
   "license": "MIT",
   "repository": {

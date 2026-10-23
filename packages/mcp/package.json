@@ -1,6 +1,6 @@
 {
   "name": "@apilot/mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for Apilot — lets AI assistants do everything the Apilot panel can: run endpoints, diff responses, version requests, and generate code.",
   "license": "MIT",
   "type": "module",

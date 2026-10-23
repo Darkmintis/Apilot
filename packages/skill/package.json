@@ -1,6 +1,6 @@
 {
   "name": "@apilot/skill",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI instructions (skills/rules) for Apilot projects.",
   "license": "MIT",
   "type": "module",
