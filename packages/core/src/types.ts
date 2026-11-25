@@ -113,6 +113,8 @@ export interface AfterStep {
 }
 
 export interface FolderFile {
+  /** endpoint id of a login request (e.g. "auth.login") run when a token is missing or a call returns 401 */
+  login?: string;
   auth?: EndpointAuth;
   headers?: Record<string, string>;
 }

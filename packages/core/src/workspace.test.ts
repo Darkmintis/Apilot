@@ -9,10 +9,23 @@ import { Workspace, importSpec, type SecretProvider } from "../src/index";
 const TOKEN = "tok-super-secret-9f8e7d";
 let server: Server;
 let baseUrl = "";
+let logins = 0;
 let orderShape: Record<string, unknown> = { id: 7, total: 12.5, customer: "Ana" };
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/login") {
+      logins++;
+      return req.headers["x-pass"] === "pw"
+        ? res.end(JSON.stringify({ token: `login-tok-${logins}` }))
+        : res.writeHead(401).end(JSON.stringify({ error: "bad" }));
+    }
+    if (req.url === "/me") {
+      return req.headers.authorization === `Bearer login-tok-${logins}` && logins > 0
+        ? res.end(JSON.stringify({ id: 1 }))
+        : res.writeHead(401).end("{}");
+    }
     const authed = req.headers.authorization === `Bearer ${TOKEN}`;
     res.setHeader("content-type", "application/json");
     if (!authed) return res.writeHead(401).end(JSON.stringify({ error: "unauthorized" }));
@@ -192,5 +205,30 @@ describe("Workspace end-to-end", () => {
     expect(result.failed).toBe(1);
     // The "Bad" endpoint gets a 404, so it fails its assertion
     expect(result.results.find((r) => r.endpointId === "x.bad")!.passed).toBe(false);
+  });
+
+  it("logs in automatically when the token is missing or expired, once", async () => {
+    const { ws, root, vault } = makeWorkspace();
+    logins = 0;
+    vault.set("dev:pass", "pw");
+    await ws.setVariable("dev", "baseUrl", "text", baseUrl);
+    await ws.setVariable("dev", "pass", "secret");
+    await ws.setVariable("dev", "token", "secret");
+    ws.saveEndpoint({ collection: "auth", name: "Login", method: "POST", url: "{{baseUrl}}/login", headers: { "X-Pass": "{{pass}}" }, after: [{ set: { token: "$.token" } }] });
+    ws.saveEndpoint({ collection: "auth", name: "Me", method: "GET", url: "{{baseUrl}}/me", auth: { type: "bearer", token: "{{token}}" } });
+    writeFileSync(join(root, ".apilot/collections/auth/_folder.yaml"), toYaml({ login: "auth.login" }));
+
+    // No token yet: logs in, then the call succeeds.
+    expect((await ws.run("auth.me")).snapshot.status).toBe(200);
+    expect(logins).toBe(1);
+    // Server rotates the token (expiry): 401 -> login again -> retry succeeds.
+    logins++;
+    expect((await ws.run("auth.me")).snapshot.status).toBe(200);
+    expect(logins).toBe(3);
+    // Bad credentials: fails clearly and does not loop.
+    vault.set("dev:pass", "wrong");
+    logins++;
+    await expect(ws.run("auth.me")).rejects.toThrow(/Login "auth.login" failed with status 401/);
+    expect(logins).toBe(5);
   });
 });
