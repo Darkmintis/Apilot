@@ -39,6 +39,17 @@ Apilot discovers every `.apilot/apilot.yaml` under the folders you open (4 level
 If an id exists in more than one project and no `project` is given, Apilot says so instead of guessing.
 
 
+## Auto-login
+
+Point a folder at a login request and Apilot signs in for you. When a call needs a token that has not been captured yet, or returns `401`, it runs the login once, captures the token, and retries the call once. A failed login stops with a clear error and is not retried.
+
+```yaml
+# .apilot/collections/auth/_folder.yaml  (inherited by sub-folders)
+login: auth.login
+```
+
+The login endpoint captures the token with `after: [{ set: { token: "$.token" } }]` and reads its credentials from secret variables, so nothing is stored in files.
+
 ## Secrets
 
 Secret values never touch files, git, or the AI.
