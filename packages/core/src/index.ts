@@ -53,3 +53,4 @@ export {
   type ToolContext,
   type DiscoverOptions,
 } from "./projects.js";
+export { summarizeWatch, watchMessage, isDue, type WatchSummary } from "./watch.js";
