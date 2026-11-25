@@ -32,6 +32,7 @@ import {
 } from "@apilot/core";
 import { callTool } from "@apilot/mcp/tools";
 import { aiFiles, writeAiFiles, MARKER } from "@apilot/skill";
+import { checkAll, onOpen, type WatchHost } from "./watch";
 
 let ext: ApilotExtension | undefined;
 
@@ -146,6 +147,7 @@ class ApilotExtension implements vscode.Disposable {
         this.rediscover(true);
         this.refresh();
       }),
+      cmd("apilot.checkChanges", () => checkAll(this.watchHost(), true)),
       cmd("apilot.setupAi", () => this.setupAi(true)),
       cmd("apilot.removeAi", () => this.removeAi()),
       vscode.workspace.onDidSaveTextDocument((doc) => this.onSave(doc)),
@@ -258,7 +260,18 @@ class ApilotExtension implements vscode.Disposable {
     ensureLocalIgnored(this.bridgeRoot);
     for (const p of this.hub.projects) if (p.hasApilot) ensureLocalIgnored(p.root);
     this.startBridge().catch((err) => console.error("[apilot] bridge failed", err));
+    onOpen(this.watchHost()).catch((err) => console.error("[apilot] daily check failed", err));
     if (this.config<boolean>("ai.autoSetup") !== false && !this.ctx.workspaceState.get("apilot.aiRemoved")) this.setupAi(false);
+  }
+
+  private watchHost(): WatchHost {
+    return {
+      hub: this.hub,
+      state: this.ctx.workspaceState,
+      envFor: (id) => this.envFor(id),
+      show: (project, endpointId) => this.openPanel({ endpointId, project, tab: "changes" }),
+      refresh: () => this.scheduleRefresh(),
+    };
   }
 
   private async init(projectId?: string): Promise<void> {

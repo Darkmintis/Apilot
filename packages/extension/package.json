@@ -78,6 +78,7 @@
       { "command": "apilot.runEndpoint", "title": "Run Endpoint", "category": "Apilot", "icon": "$(play)" },
       { "command": "apilot.openFile", "title": "Open Endpoint File", "category": "Apilot", "icon": "$(go-to-file)" },
       { "command": "apilot.refresh", "title": "Refresh", "category": "Apilot", "icon": "$(refresh)" },
+      { "command": "apilot.checkChanges", "title": "Check APIs for Changes", "category": "Apilot", "icon": "$(bell)" },
       { "command": "apilot.setupAi", "title": "Set Up AI Assistant (skills + MCP)", "category": "Apilot" },
       { "command": "apilot.removeAi", "title": "Remove AI Assistant Setup", "category": "Apilot" }
     ],
@@ -89,7 +90,8 @@
         { "command": "apilot.refresh", "when": "view == apilot.endpoints", "group": "navigation@4" },
         { "command": "apilot.import", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@1" },
         { "command": "apilot.environments", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@2" },
-        { "command": "apilot.setupAi", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@3" }
+        { "command": "apilot.checkChanges", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@3" },
+        { "command": "apilot.setupAi", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@4" }
       ],
       "view/item/context": [
         { "command": "apilot.runEndpoint", "when": "view == apilot.endpoints && viewItem == endpoint", "group": "inline@1" },
@@ -111,6 +113,16 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically add Apilot skills for Cursor, Claude Code, and Copilot to this project and register the Apilot MCP server with the editor."
+        },
+        "apilot.watch.onOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Once a day, when a project opens, call its safe endpoints (GET requests, or endpoints with watch: true) and alert on response changes that could break your app. Never prompts for secrets."
+        },
+        "apilot.watch.environment": {
+          "type": "string",
+          "default": "",
+          "description": "Environment the daily check uses. Empty uses the selected environment, and skips any that looks like production."
         },
         "apilot.timeout": {
           "type": "number",
