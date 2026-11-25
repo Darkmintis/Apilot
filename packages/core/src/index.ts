@@ -52,3 +52,4 @@ export {
   type ToolContext,
   type DiscoverOptions,
 } from "./projects.js";
+export { startMockServer, matchRoute, routeSegments, mockReply, type MockHandle, type MockOptions, type MockLogEntry } from "./mock.js";

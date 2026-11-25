@@ -99,6 +99,7 @@ export function parseEndpointFile(
     body: doc.body ?? null,
     expect: doc.expect as EndpointFile["expect"] | undefined,
     after: doc.after as EndpointFile["after"] | undefined,
+    mock: doc.mock as EndpointFile["mock"] | undefined,
   };
 }
 

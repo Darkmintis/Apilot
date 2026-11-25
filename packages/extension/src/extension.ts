@@ -32,6 +32,7 @@ import {
 } from "@apilot/core";
 import { callTool } from "@apilot/mcp/tools";
 import { aiFiles, writeAiFiles, MARKER } from "@apilot/skill";
+import { MockController } from "./mock";
 
 let ext: ApilotExtension | undefined;
 
@@ -105,6 +106,7 @@ class ApilotExtension implements vscode.Disposable {
   private bridge: http.Server | undefined;
   private mcpRegistration: vscode.Disposable | undefined;
   private readonly tree = new EndpointTree(this);
+  private readonly mock: MockController;
   private readonly disposables: vscode.Disposable[] = [];
   private refreshTimer: NodeJS.Timeout | undefined;
   /** When the project list was last re-scanned (see `rediscover`). */
@@ -116,6 +118,7 @@ class ApilotExtension implements vscode.Disposable {
       makeWorkspace: (root) =>
         new Workspace(root, { secrets: new KeychainSecrets(ctx.secrets, root), timeout: this.config<number>("timeout") }),
     });
+    this.mock = new MockController(this.hub);
     this.rediscover();
     this.watchProjects();
 
@@ -130,6 +133,9 @@ class ApilotExtension implements vscode.Disposable {
 
     this.disposables.push(
       treeView,
+      this.mock,
+      cmd("apilot.mock.start", () => this.startMock()),
+      cmd("apilot.mock.stop", () => this.mock.stop()),
       cmd("apilot.open", (arg?: string | EndpointItem) => {
         if (arg && typeof arg === "object") return this.openPanel({ endpointId: arg.endpointId, project: arg.project.id });
         if (typeof arg === "string") return this.openPanel({ endpointId: arg });
@@ -259,6 +265,13 @@ class ApilotExtension implements vscode.Disposable {
     for (const p of this.hub.projects) if (p.hasApilot) ensureLocalIgnored(p.root);
     this.startBridge().catch((err) => console.error("[apilot] bridge failed", err));
     if (this.config<boolean>("ai.autoSetup") !== false && !this.ctx.workspaceState.get("apilot.aiRemoved")) this.setupAi(false);
+  }
+
+  private async startMock(): Promise<void> {
+    const projects = this.hub.projects.filter((p) => p.hasApilot);
+    if (!projects.length) throw new Error("No Apilot project found. Run “Apilot: Initialize Project” first.");
+    const picked = projects.length === 1 ? projects[0]! : (await vscode.window.showQuickPick(projects.map((p) => ({ label: p.name, description: p.id, p })), { title: "Mock which project?" }))?.p;
+    if (picked) await this.mock.start(picked);
   }
 
   private async init(projectId?: string): Promise<void> {

@@ -106,6 +106,17 @@ export interface EndpointFile {
     schema?: string; // path to schema file
   };
   after?: AfterStep[];
+  /** what the mock server answers with; defaults to the baseline response */
+  mock?: MockResponse;
+}
+
+export interface MockResponse {
+  status?: number;
+  headers?: Record<string, string>;
+  /** raw string, or an object/array sent as JSON */
+  body?: unknown;
+  /** artificial latency in ms */
+  delay?: number;
 }
 
 export interface AfterStep {

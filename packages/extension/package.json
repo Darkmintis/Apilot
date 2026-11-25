@@ -78,6 +78,8 @@
       { "command": "apilot.runEndpoint", "title": "Run Endpoint", "category": "Apilot", "icon": "$(play)" },
       { "command": "apilot.openFile", "title": "Open Endpoint File", "category": "Apilot", "icon": "$(go-to-file)" },
       { "command": "apilot.refresh", "title": "Refresh", "category": "Apilot", "icon": "$(refresh)" },
+      { "command": "apilot.mock.start", "title": "Start Mock Server", "category": "Apilot", "icon": "$(radio-tower)" },
+      { "command": "apilot.mock.stop", "title": "Stop Mock Server", "category": "Apilot" },
       { "command": "apilot.setupAi", "title": "Set Up AI Assistant (skills + MCP)", "category": "Apilot" },
       { "command": "apilot.removeAi", "title": "Remove AI Assistant Setup", "category": "Apilot" }
     ],
@@ -89,7 +91,8 @@
         { "command": "apilot.refresh", "when": "view == apilot.endpoints", "group": "navigation@4" },
         { "command": "apilot.import", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@1" },
         { "command": "apilot.environments", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@2" },
-        { "command": "apilot.setupAi", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@3" }
+        { "command": "apilot.mock.start", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@3" },
+        { "command": "apilot.setupAi", "when": "view == apilot.endpoints && apilot.hasProject", "group": "more@4" }
       ],
       "view/item/context": [
         { "command": "apilot.runEndpoint", "when": "view == apilot.endpoints && viewItem == endpoint", "group": "inline@1" },
@@ -111,6 +114,16 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically add Apilot skills for Cursor, Claude Code, and Copilot to this project and register the Apilot MCP server with the editor."
+        },
+        "apilot.mock.port": {
+          "type": "number",
+          "default": 4010,
+          "description": "Port for the mock server. If it is taken, a free port is used."
+        },
+        "apilot.mock.lan": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let other devices on your network (phones) reach the mock server. Turn off to serve this machine only."
         },
         "apilot.timeout": {
           "type": "number",
