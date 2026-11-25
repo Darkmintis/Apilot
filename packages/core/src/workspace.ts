@@ -259,17 +259,19 @@ export class Workspace {
   // Running
   // -------------------------------------------------------------------------
 
-  async run(id: string, envName?: string): Promise<RunOutcome> {
+  async run(id: string, envName?: string, retried = false): Promise<RunOutcome> {
     const env = this.envName(envName);
     const { definition } = this.endpoint(id);
     const def = this.withFolderDefaults(id, definition);
     const revision = this.recordRevision(id);
-    const { variables, secretValues } = await this.resolveVariables(env, def);
+    const login = retried ? undefined : this.loginFor(id);
+    const { variables, secretValues } = await this.resolveVariables(env, def, login?.vars);
 
     let request;
     try {
       request = this.runner.resolve(def, { variables, secretNames: Object.keys(secretValues) });
     } catch (err) {
+      if (err instanceof VariableError && login) return this.loginAndRetry(login.id, id, env);
       if (err instanceof VariableError) {
         throw new Error(`Variable "${err.variable}" is not defined in environment "${env}". Add it to .apilot/environments/${env}.yaml, or run the endpoint that captures it first (after: set).`);
       }
@@ -277,6 +279,8 @@ export class Workspace {
     }
 
     const raw = await this.runner.run(request, id, def.expect?.status);
+    // Expired token: log in again and retry once. The 401 is not saved.
+    if (raw.status === 401 && login) return this.loginAndRetry(login.id, id, env);
 
     const captured: Record<string, string> = {};
     const envVars = this.environment(env).variables;
@@ -331,12 +335,22 @@ export class Workspace {
     };
   }
 
+  /** Run the login endpoint (which captures the token via `after: set`), then retry once. */
+  private async loginAndRetry(loginId: string, id: string, env: string): Promise<RunOutcome> {
+    const r = await this.run(loginId, env, true);
+    if (!r.snapshot.passed) {
+      throw new Error(`Login "${loginId}" failed with status ${r.snapshot.status}; not retrying. Check the credentials for "${env}".`);
+    }
+    return this.run(id, env, true);
+  }
+
   /** Names of secrets this endpoint needs that have no value yet. */
   async missingSecrets(id: string, envName?: string): Promise<string[]> {
     const env = this.envName(envName);
     const needed = this.neededSecrets(env, this.withFolderDefaults(id, this.endpoint(id).definition));
+    const provided = this.loginFor(id)?.vars ?? [];
     const missing: string[] = [];
-    for (const name of needed) if (!(await this.secrets.get(env, name))) missing.push(name);
+    for (const name of needed.filter((n) => !provided.includes(n))) if (!(await this.secrets.get(env, name))) missing.push(name);
     return missing;
   }
 
@@ -508,19 +522,34 @@ export class Workspace {
     return join(this.apilotDir, "history", ...id.split("/"));
   }
 
-  /** Merge `_folder.yaml` headers/auth from the collection folder chain. */
-  private withFolderDefaults(id: string, def: EndpointFile): EndpointFile {
+  /** `_folder.yaml` files from the collections root down to the endpoint's folder. */
+  private folderChain(id: string): FolderFile[] {
     const parts = dirname(this.entry(id).file).split("/");
-    let headers: Record<string, string> = {};
-    let auth = undefined as EndpointFile["auth"];
+    const chain: FolderFile[] = [];
     for (let i = 3; i <= parts.length; i++) {
       const f = join(this.root, ...parts.slice(0, i), "_folder.yaml");
-      if (!existsSync(f)) continue;
-      const folder = (parseYaml(readFileSync(f, "utf-8")) ?? {}) as FolderFile;
+      if (existsSync(f)) chain.push((parseYaml(readFileSync(f, "utf-8")) ?? {}) as FolderFile);
+    }
+    return chain;
+  }
+
+  /** Merge `_folder.yaml` headers/auth from the collection folder chain. */
+  private withFolderDefaults(id: string, def: EndpointFile): EndpointFile {
+    let headers: Record<string, string> = {};
+    let auth = undefined as EndpointFile["auth"];
+    for (const folder of this.folderChain(id)) {
       headers = { ...headers, ...(folder.headers ?? {}) };
       auth = folder.auth ?? auth;
     }
     return { ...def, headers: { ...headers, ...(def.headers ?? {}) }, auth: def.auth ?? auth };
+  }
+
+  /** The login endpoint set in `_folder.yaml` (`login: auth.login`), and the variables it captures. */
+  private loginFor(id: string): { id: string; vars: string[] } | undefined {
+    const loginId = this.folderChain(id).reduce<string | undefined>((acc, f) => f.login ?? acc, undefined);
+    if (!loginId || loginId === id) return undefined;
+    const vars = (this.endpoint(loginId).definition.after ?? []).flatMap((s) => Object.keys(s.set ?? {}));
+    return { id: loginId, vars };
   }
 
   private neededSecrets(env: string, def: EndpointFile): string[] {
@@ -534,7 +563,7 @@ export class Workspace {
     return [...used].filter((n) => vars[n]?.type === "secret" && !this.captured.get(env)?.[n]);
   }
 
-  private async resolveVariables(env: string, def: EndpointFile): Promise<{ variables: Record<string, string>; secretValues: Record<string, string> }> {
+  private async resolveVariables(env: string, def: EndpointFile, loginProvides: string[] = []): Promise<{ variables: Record<string, string>; secretValues: Record<string, string> }> {
     const needed = this.neededSecrets(env, def);
     const secretValues: Record<string, string> = {};
     let missing: string[] = [];
@@ -543,6 +572,8 @@ export class Workspace {
       if (v) secretValues[name] = v;
       else missing.push(name);
     }
+    // A login endpoint will capture these, so they are not "missing".
+    missing = missing.filter((n) => !loginProvides.includes(n));
     if (missing.length && this.secrets.prompt) {
       await this.secrets.prompt(env, missing);
       const still: string[] = [];
