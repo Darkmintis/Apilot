@@ -35,6 +35,7 @@ export {
   type VariableInfo,
   type RunOutcome,
   type RunAllItem,
+  type RunAllResult,
   type ImpactMatch,
 } from "./workspace.js";
 
@@ -52,3 +53,4 @@ export {
   type ToolContext,
   type DiscoverOptions,
 } from "./projects.js";
+export { summarizeWatch, watchMessage, isDue, type WatchSummary } from "./watch.js";

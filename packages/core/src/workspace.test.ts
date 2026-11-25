@@ -231,4 +231,23 @@ describe("Workspace end-to-end", () => {
     await expect(ws.run("auth.me")).rejects.toThrow(/Login "auth.login" failed with status 401/);
     expect(logins).toBe(5);
   });
+
+  it("runWatched calls only safe endpoints and skips missing secrets without prompting", async () => {
+    const { ws, vault } = makeWorkspace();
+    await ws.setVariable("dev", "baseUrl", "text", baseUrl);
+    ws.deleteEndpoint("example.get-todo");
+    const auth = { type: "bearer", token: "{{authToken}}" } as const;
+    ws.saveEndpoint({ collection: "w", name: "Read", method: "GET", url: "{{baseUrl}}/orders", auth });
+    ws.saveEndpoint({ collection: "w", name: "Create", method: "POST", url: "{{baseUrl}}/orders", auth });
+    ws.saveEndpoint({ collection: "w", name: "Muted", method: "GET", url: "{{baseUrl}}/orders", auth, watch: false });
+    ws.saveEndpoint({ collection: "w", name: "Opted In", method: "POST", url: "{{baseUrl}}/orders", auth, watch: true });
+    const r = await ws.runWatched();
+    expect(r.results.map((x) => x.endpointId).sort()).toEqual(["w.opted-in", "w.read"]);
+    expect(r.failed).toBe(0);
+
+    vault.clear();
+    const skipped = await ws.runWatched();
+    expect(skipped.results.every((x) => x.skipped)).toBe(true);
+    expect([skipped.passed, skipped.failed]).toEqual([0, 0]);
+  });
 });

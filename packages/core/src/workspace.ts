@@ -95,6 +95,16 @@ export interface RunAllItem {
   breaking: boolean;
   summary?: DiffResult["summary"];
   error?: string;
+  /** not run (e.g. a needed secret has no value) — never counted as a failure */
+  skipped?: boolean;
+}
+
+export interface RunAllResult {
+  env: string;
+  results: RunAllItem[];
+  passed: number;
+  failed: number;
+  breaking: number;
 }
 
 export interface ImpactMatch {
@@ -308,30 +318,51 @@ export class Workspace {
   }
 
   /** Run a collection (or everything) in order, so `after: set` chaining works. */
-  async runAll(collectionId?: string, envName?: string): Promise<{ env: string; results: RunAllItem[]; passed: number; failed: number; breaking: number }> {
-    const env = this.envName(envName);
+  async runAll(collectionId?: string, envName?: string): Promise<RunAllResult> {
     const endpoints = this.registry().endpoints.filter(
       (e) => !collectionId || e.collectionId === collectionId || e.collectionId.startsWith(`${collectionId}/`)
     );
+    return this.runMany(endpoints, this.envName(envName), false);
+  }
+
+  /**
+   * Run only the endpoints that are safe to call unattended: GET/HEAD requests
+   * (or any request with `watch: true`; `watch: false` opts out). Never prompts —
+   * an endpoint whose secrets have no value yet is skipped.
+   */
+  async runWatched(envName?: string): Promise<RunAllResult> {
+    const endpoints = this.registry().endpoints.filter((e) => {
+      const watch = this.endpoint(e.id).definition.watch;
+      return watch ?? (e.method === "GET" || e.method === "HEAD");
+    });
+    return this.runMany(endpoints, this.envName(envName), true);
+  }
+
+  private async runMany(endpoints: EndpointEntry[], env: string, unattended: boolean): Promise<RunAllResult> {
     const results: RunAllItem[] = [];
     for (const ep of endpoints) {
+      const base = { endpointId: ep.id, name: ep.name, method: ep.method };
       try {
+        if (unattended) {
+          const missing = await this.missingSecrets(ep.id, env);
+          if (missing.length) {
+            results.push({ ...base, passed: false, breaking: false, skipped: true, error: `Missing secret value(s): ${missing.join(", ")}` });
+            continue;
+          }
+        }
         const r = await this.run(ep.id, env);
-        results.push({
-          endpointId: ep.id, name: ep.name, method: ep.method,
-          status: r.snapshot.status, timeMs: r.snapshot.timeMs, passed: r.snapshot.passed,
-          breaking: !!r.diff?.breaking, summary: r.diff?.summary,
-        });
+        results.push({ ...base, status: r.snapshot.status, timeMs: r.snapshot.timeMs, passed: r.snapshot.passed, breaking: !!r.diff?.breaking, summary: r.diff?.summary });
       } catch (err) {
-        results.push({ endpointId: ep.id, name: ep.name, method: ep.method, passed: false, breaking: false, error: err instanceof Error ? err.message : String(err) });
+        results.push({ ...base, passed: false, breaking: false, error: err instanceof Error ? err.message : String(err) });
       }
     }
+    const counted = results.filter((r) => !r.skipped);
     return {
       env,
       results,
-      passed: results.filter((r) => r.passed).length,
-      failed: results.filter((r) => !r.passed).length,
-      breaking: results.filter((r) => r.breaking).length,
+      passed: counted.filter((r) => r.passed).length,
+      failed: counted.filter((r) => !r.passed).length,
+      breaking: counted.filter((r) => r.breaking).length,
     };
   }
 
@@ -348,8 +379,9 @@ export class Workspace {
   async missingSecrets(id: string, envName?: string): Promise<string[]> {
     const env = this.envName(envName);
     const needed = this.neededSecrets(env, this.withFolderDefaults(id, this.endpoint(id).definition));
-    const provided = this.loginFor(id)?.vars ?? [];
-    const missing: string[] = [];
+    const login = this.loginFor(id);
+    const provided = login?.vars ?? [];
+    const missing: string[] = login ? await this.missingSecrets(login.id, env) : [];
     for (const name of needed.filter((n) => !provided.includes(n))) if (!(await this.secrets.get(env, name))) missing.push(name);
     return missing;
   }
@@ -644,6 +676,7 @@ function normalizeEndpoint(def: EndpointFile): EndpointFile {
   if (def.body !== undefined && def.body !== null && def.body !== "") out.body = def.body;
   if (def.expect && Object.keys(def.expect).length) out.expect = def.expect;
   if (def.after?.length) out.after = def.after;
+  if (typeof def.watch === "boolean") out.watch = def.watch;
   return out as unknown as EndpointFile;
 }
 

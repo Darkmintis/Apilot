@@ -50,6 +50,15 @@ login: auth.login
 
 The login endpoint captures the token with `after: [{ set: { token: "$.token" } }]` and reads its credentials from secret variables, so nothing is stored in files.
 
+## Daily check
+
+Turn on `apilot.watch.onOpen` (Apilot offers it once) and each project is checked the first time you open it each day. Apilot calls the safe endpoints and alerts you only when a response changed in a way that could break your app, with a **Show Changes** button. Run it any time with **Apilot: Check APIs for Changes**.
+
+- Only `GET`/`HEAD` endpoints run. Add `watch: true` to an endpoint file to include another method, or `watch: false` to leave one out.
+- It never asks for secrets: an endpoint with a missing secret is skipped.
+- It uses the selected environment, and skips one that looks like production unless you set `apilot.watch.environment`.
+- Combined with [auto-login](#auto-login), authenticated endpoints are checked too.
+
 ## Secrets
 
 Secret values never touch files, git, or the AI.

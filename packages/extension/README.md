@@ -40,6 +40,8 @@ This fails the build on errors or breaking changes against the committed baselin
 | Setting | Default | |
 |---|---|---|
 | `apilot.ai.autoSetup` | `true` | Add AI skills and register the MCP server automatically |
+| `apilot.watch.onOpen` | `false` | Once a day on open, check safe (GET) endpoints and alert on breaking response changes |
+| `apilot.watch.environment` | empty | Environment for the daily check (empty: the selected one, never production) |
 | `apilot.timeout` | `30000` | Request timeout (ms) |
 
 To undo the AI setup, run **Apilot: Remove AI Assistant Setup**. It deletes only the files Apilot created.
