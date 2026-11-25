@@ -35,6 +35,7 @@ export {
   type VariableInfo,
   type RunOutcome,
   type RunAllItem,
+  type RunAllResult,
   type ImpactMatch,
 } from "./workspace.js";
 

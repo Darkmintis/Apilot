@@ -106,6 +106,8 @@ export interface EndpointFile {
     schema?: string; // path to schema file
   };
   after?: AfterStep[];
+  /** run unattended by the daily check: default true for GET/HEAD, false otherwise */
+  watch?: boolean;
 }
 
 export interface AfterStep {
