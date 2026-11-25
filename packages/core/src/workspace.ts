@@ -613,6 +613,7 @@ function normalizeEndpoint(def: EndpointFile): EndpointFile {
   if (def.body !== undefined && def.body !== null && def.body !== "") out.body = def.body;
   if (def.expect && Object.keys(def.expect).length) out.expect = def.expect;
   if (def.after?.length) out.after = def.after;
+  if (def.mock) out.mock = def.mock;
   return out as unknown as EndpointFile;
 }
 
