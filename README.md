@@ -39,6 +39,25 @@ Apilot discovers every `.apilot/apilot.yaml` under the folders you open (4 level
 If an id exists in more than one project and no `project` is given, Apilot says so instead of guessing.
 
 
+## Mock server
+
+Run **Apilot: Start Mock Server** and your endpoints answer over HTTP on your machine's network address, so a phone or emulator can call them like a real backend, before the backend exists or while it is down. Point your app's base URL at the address shown (an Android emulator uses `10.0.2.2`).
+
+Each endpoint answers with its `mock:` block, else its baseline response:
+
+```yaml
+# .apilot/collections/orders/get.yaml
+url: "{{baseUrl}}/orders/{{id}}"
+mock:
+  status: 200
+  body: { id: 7, total: 12.5 }
+  delay: 300   # ms, optional
+```
+
+Paths match by segment (`{{id}}`, `:id` and `{id}` match anything), so an app whose base URL has a prefix such as `/v1` still matches. Anything else returns a `404` that lists the available routes. Changes to endpoints and baselines apply without a restart. A mock response never touches your snapshots or baselines.
+
+The server is reachable by every device on your network while it runs; set `apilot.mock.lan` to `false` to serve this machine only.
+
 ## Secrets
 
 Secret values never touch files, git, or the AI.
